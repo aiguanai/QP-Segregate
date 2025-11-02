@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 import os
 
-from app.api import admin, student, auth, courses
+from app.api import admin, student, auth, courses, proposed_api
 from app.core.config import settings
 from app.core.database import engine
 from app.models import Base
@@ -41,6 +41,7 @@ app.include_router(auth.router, prefix="/api/auth", tags=["Authentication"])
 app.include_router(admin.router, prefix="/api/admin", tags=["Admin"])
 app.include_router(student.router, prefix="/api/student", tags=["Student"])
 app.include_router(courses.router, prefix="/api/courses", tags=["Courses"])
+app.include_router(proposed_api.router, prefix="/api/proposed", tags=["Proposed System"])
 
 @app.get("/")
 async def root():

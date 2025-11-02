@@ -1,0 +1,118 @@
+version: '3.8'
+
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      # Cloud database URLs - Set these in your .env file
+      - DATABASE_URL=${CLOUD_DATABASE_URL}
+      - MONGODB_URL=${CLOUD_MONGODB_URL}
+      - REDIS_URL=${CLOUD_REDIS_URL}
+      
+      # Local storage (no AWS S3)
+      - UPLOAD_DIR=storage/papers
+      - TEMP_UPLOAD_DIR=tmp/uploads
+      - PAGE_IMAGES_DIR=storage/page_images
+      
+      # Security
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+      - JWT_ALGORITHM=HS256
+      - ACCESS_TOKEN_EXPIRE_MINUTES=30
+      
+      # External APIs (Optional)
+      - PINECONE_API_KEY=${PINECONE_API_KEY}
+      - MATHPIX_API_KEY=${MATHPIX_API_KEY}
+      
+      # Processing thresholds
+      - OCR_CONFIDENCE_THRESHOLD=0.4
+      - CLASSIFICATION_CONFIDENCE_THRESHOLD=0.7
+      - SIMILARITY_THRESHOLD=0.85
+      - TEMP_UPLOAD_EXPIRE_HOURS=24
+      
+      # Pagination
+      - DEFAULT_PAGE_SIZE=20
+      - MAX_PAGE_SIZE=100
+    volumes:
+      # Mount local storage directories
+      - ./storage:/app/storage
+      - ./tmp:/app/tmp
+      - ./logs:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  celery_worker:
+    build: ./backend
+    environment:
+      - DATABASE_URL=${CLOUD_DATABASE_URL}
+      - MONGODB_URL=${CLOUD_MONGODB_URL}
+      - REDIS_URL=${CLOUD_REDIS_URL}
+      - UPLOAD_DIR=storage/papers
+      - TEMP_UPLOAD_DIR=tmp/uploads
+      - PAGE_IMAGES_DIR=storage/page_images
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+      - PINECONE_API_KEY=${PINECONE_API_KEY}
+      - MATHPIX_API_KEY=${MATHPIX_API_KEY}
+      - OCR_CONFIDENCE_THRESHOLD=0.4
+      - CLASSIFICATION_CONFIDENCE_THRESHOLD=0.7
+      - SIMILARITY_THRESHOLD=0.85
+      - TEMP_UPLOAD_EXPIRE_HOURS=24
+    volumes:
+      - ./storage:/app/storage
+      - ./tmp:/app/tmp
+      - ./logs:/app/logs
+    restart: unless-stopped
+    command: celery -A app.tasks.celery worker --loglevel=info --concurrency=2
+
+  celery_beat:
+    build: ./backend
+    environment:
+      - DATABASE_URL=${CLOUD_DATABASE_URL}
+      - MONGODB_URL=${CLOUD_MONGODB_URL}
+      - REDIS_URL=${CLOUD_REDIS_URL}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+    volumes:
+      - ./logs:/app/logs
+    restart: unless-stopped
+    command: celery -A app.tasks.celery beat --loglevel=info
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+      - NODE_ENV=production
+    depends_on:
+      - backend
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Optional: Nginx reverse proxy for production
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf
+      - ./ssl:/etc/nginx/ssl
+      - ./storage:/usr/share/nginx/html/storage  # Serve static files
+    depends_on:
+      - frontend
+      - backend
+    restart: unless-stopped
+
+volumes:
+  storage:
+  tmp:
+  logs:

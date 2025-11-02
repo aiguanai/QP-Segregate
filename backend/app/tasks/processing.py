@@ -7,6 +7,7 @@ from app.models.question import Question, ReviewQueue, BloomLevel, BloomCategory
 from app.models.course import CourseUnit
 from app.services.ocr_service import OCRService
 from app.services.classification_service import ClassificationService
+from app.core.local_cloud_storage import local_cloud_storage
 from app.tasks.celery import celery
 import os
 import json
@@ -93,13 +94,22 @@ def process_question_paper(self, paper_id: int):
         db.close()
 
 def process_ocr(paper: QuestionPaper) -> Dict:
-    """Process PDF with OCR"""
+    """Process PDF with OCR using local cloud storage"""
     # Create output directory for page images
     output_dir = os.path.join(settings.PAGE_IMAGES_DIR, f"paper_{paper.paper_id}")
     os.makedirs(output_dir, exist_ok=True)
     
     # Extract text from PDF
     ocr_results = ocr_service.extract_text_from_pdf(paper.pdf_path, output_dir)
+    
+    # Upload processed images to local cloud storage
+    for i, page in enumerate(ocr_results['pages']):
+        if page.get('image_path'):
+            cloud_key = f"papers/{paper.paper_id}/page_images/page_{i+1}.png"
+            cloud_url = local_cloud_storage.upload_file(page['image_path'], cloud_key)
+            page['cloud_image_url'] = cloud_url
+            # Keep local path for now, will be cleaned up later
+            page['local_image_path'] = page['image_path']
     
     # Store raw OCR data in MongoDB
     mongo_db.raw_ocr_data.insert_one({
