@@ -4,7 +4,7 @@ import numpy as np
 from pdf2image import convert_from_path
 from PIL import Image
 import os
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Optional
 import re
 
 class OCRService:
@@ -65,6 +65,50 @@ class OCRService:
             return rotated
         
         return image
+    
+    def extract_text_from_docx(self, docx_path: str) -> Dict:
+        """Extract text from DOCX file directly"""
+        try:
+            from docx import Document
+            
+            doc = Document(docx_path)
+            
+            results = {
+                "total_pages": 0,
+                "pages": [],
+                "overall_confidence": 100.0  # DOCX has perfect text extraction
+            }
+            
+            # Extract all paragraphs
+            full_text = []
+            for para in doc.paragraphs:
+                if para.text.strip():
+                    full_text.append(para.text.strip())
+            
+            # Estimate pages (rough estimate: ~500 words per page)
+            total_words = len(' '.join(full_text).split())
+            estimated_pages = max(1, (total_words // 500) + 1)
+            
+            # Combine all text (for now, treat as single page for processing)
+            combined_text = '\n'.join(full_text)
+            
+            page_result = {
+                "page_number": 1,
+                "text": combined_text,
+                "confidence": 100.0,  # Perfect extraction from DOCX
+                "word_count": total_words,
+                "image_path": None
+            }
+            
+            results["pages"].append(page_result)
+            results["total_pages"] = estimated_pages
+            
+            return results
+            
+        except ImportError:
+            raise Exception("python-docx library is required for DOCX processing")
+        except Exception as e:
+            raise Exception(f"DOCX processing failed: {str(e)}")
     
     def extract_text_from_pdf(self, pdf_path: str, output_dir: str = None) -> Dict:
         """Extract text from PDF using OCR"""

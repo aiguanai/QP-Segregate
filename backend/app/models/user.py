@@ -18,5 +18,6 @@ class User(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     
     # Relationships
+    branch = relationship("Branch", back_populates="users")
     uploaded_papers = relationship("QuestionPaper", back_populates="uploader")
     bookmarks = relationship("StudentBookmark", back_populates="student")

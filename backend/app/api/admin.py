@@ -16,19 +16,22 @@ from pydantic import BaseModel
 
 router = APIRouter()
 
-class PDFUploadResponse(BaseModel):
+class FileUploadResponse(BaseModel):
     upload_id: str
     page_count: int
     file_size: int
     temp_path: str
+    file_type: str  # 'pdf' or 'docx'
+    original_filename: str
 
 class MetadataSubmitRequest(BaseModel):
     upload_id: str
     course_code: str
     academic_year: int
     semester_type: str
-    exam_type: str
+    exam_type: Optional[str] = None  # Optional for syllabus
     exam_date: Optional[datetime] = None
+    file_type: Optional[str] = "question_paper"  # 'question_paper' or 'syllabus'
 
 class ProcessingStatusResponse(BaseModel):
     paper_id: int
@@ -55,17 +58,87 @@ class QuestionApprovalRequest(BaseModel):
     marks: Optional[int] = None
     approved: bool = True
 
-@router.post("/upload-pdf", response_model=PDFUploadResponse)
-async def upload_pdf(
+def convert_docx_to_pdf(docx_path: str) -> str:
+    """Convert DOCX file to PDF (optional - for storage purposes)"""
+    try:
+        from docx import Document
+        from reportlab.lib.pagesizes import letter
+        from reportlab.pdfgen import canvas
+        
+        doc = Document(docx_path)
+        pdf_path = docx_path.replace('.docx', '.pdf').replace('.doc', '.pdf')
+        
+        c = canvas.Canvas(pdf_path, pagesize=letter)
+        y = 750
+        for para in doc.paragraphs:
+            if para.text.strip():
+                # Handle long lines by wrapping
+                text = para.text
+                words = text.split()
+                line = ""
+                for word in words:
+                    if len(line + word) < 80:
+                        line += word + " "
+                    else:
+                        if line:
+                            c.drawString(50, y, line.strip())
+                            y -= 20
+                        line = word + " "
+                        if y < 50:
+                            c.showPage()
+                            y = 750
+                if line:
+                    c.drawString(50, y, line.strip())
+                    y -= 20
+                if y < 50:
+                    c.showPage()
+                    y = 750
+        
+        c.save()
+        return pdf_path
+    except Exception as e:
+        # If conversion fails, we can still process DOCX directly
+        # Just return the original path and let OCR service handle it
+        return docx_path
+
+def get_page_count(file_path: str, file_type: str) -> int:
+    """Get page count for PDF or DOCX file"""
+    if file_type == 'pdf':
+        try:
+            from pdf2image import convert_from_path
+            return len(convert_from_path(file_path))
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Error reading PDF: {str(e)}")
+    elif file_type == 'docx':
+        try:
+            from docx import Document
+            doc = Document(file_path)
+            # Estimate pages based on paragraphs (rough estimate)
+            para_count = len([p for p in doc.paragraphs if p.text.strip()])
+            # Rough estimate: ~30 paragraphs per page
+            return max(1, para_count // 30 + 1)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Error reading DOCX: {str(e)}")
+    else:
+        return 1
+
+@router.post("/upload-file", response_model=FileUploadResponse)
+async def upload_file(
     file: UploadFile = File(...),
+    file_type: str = Form(...),  # 'question_paper' or 'syllabus'
     current_user: User = Depends(get_current_user)
 ):
-    """Step 1: Upload PDF file and return upload details"""
+    """Step 1: Upload PDF or DOCX file and return upload details"""
     if current_user.role != "ADMIN":
         raise HTTPException(status_code=403, detail="Admin access required")
     
-    if not file.filename.lower().endswith('.pdf'):
-        raise HTTPException(status_code=400, detail="Only PDF files are allowed")
+    filename_lower = file.filename.lower() if file.filename else ""
+    if not (filename_lower.endswith('.pdf') or filename_lower.endswith('.docx') or filename_lower.endswith('.doc')):
+        raise HTTPException(status_code=400, detail="Only PDF and DOCX files are allowed")
+    
+    # Determine file type
+    is_docx = filename_lower.endswith('.docx') or filename_lower.endswith('.doc')
+    detected_file_type = 'docx' if is_docx else 'pdf'
     
     # Create upload ID and temp directory
     upload_id = f"upload_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{file.filename}"
@@ -77,23 +150,35 @@ async def upload_pdf(
     with open(temp_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
     
+    # For DOCX files, we'll keep the original and process it directly
+    # No need to convert to PDF for processing (OCR service can handle DOCX)
+    
     # Get file size
     file_size = os.path.getsize(temp_path)
     
-    # Get page count using pdf2image
+    # Get page count
     try:
-        from pdf2image import convert_from_path
-        pages = convert_from_path(temp_path, first_page=1, last_page=1)
-        page_count = len(convert_from_path(temp_path))
+        page_count = get_page_count(temp_path, detected_file_type)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Error reading PDF: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
     
-    return PDFUploadResponse(
+    return FileUploadResponse(
         upload_id=upload_id,
         page_count=page_count,
         file_size=file_size,
-        temp_path=temp_path
+        temp_path=temp_path,
+        file_type=detected_file_type,
+        original_filename=file.filename or "unknown"
     )
+
+# Keep old endpoint for backward compatibility
+@router.post("/upload-pdf", response_model=FileUploadResponse)
+async def upload_pdf_legacy(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user)
+):
+    """Legacy endpoint - redirects to upload-file"""
+    return await upload_file(file, "question_paper", current_user)
 
 @router.post("/submit-metadata")
 async def submit_metadata(
@@ -111,20 +196,34 @@ async def submit_metadata(
     if not os.path.exists(temp_path):
         raise HTTPException(status_code=404, detail="Upload file not found")
     
+    # Determine file extension from temp path
+    file_ext = '.pdf'  # Default to PDF
+    if os.path.exists(temp_path):
+        _, ext = os.path.splitext(temp_path)
+        if ext:
+            file_ext = ext
+    
     # Create permanent storage path
     permanent_dir = "storage/papers"
     os.makedirs(permanent_dir, exist_ok=True)
-    permanent_path = os.path.join(permanent_dir, f"{request.upload_id}.pdf")
+    permanent_path = os.path.join(permanent_dir, f"{request.upload_id}{file_ext}")
     
     # Move file to permanent storage
     shutil.move(temp_path, permanent_path)
     
     # Create database entry
+    # For syllabus, exam_type might be None, so we need to handle that
+    exam_type_enum = None
+    if request.exam_type:
+        exam_type_enum = ExamType(request.exam_type)
+    elif request.file_type == "question_paper":
+        raise HTTPException(status_code=400, detail="Exam type is required for question papers")
+    
     paper = QuestionPaper(
         course_code=request.course_code,
         academic_year=request.academic_year,
         semester_type=SemesterType(request.semester_type),
-        exam_type=ExamType(request.exam_type),
+        exam_type=exam_type_enum or ExamType.SEE,  # Default to SEE if not provided (for syllabus)
         exam_date=request.exam_date,
         pdf_path=permanent_path,
         temp_pdf_path=temp_path,

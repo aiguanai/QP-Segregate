@@ -36,6 +36,7 @@ class CourseOffering(Base):
     
     # Relationships
     course = relationship("Course", back_populates="offerings")
+    branch = relationship("Branch", back_populates="course_offerings")
 
 class CourseEquivalence(Base):
     __tablename__ = "course_equivalence"

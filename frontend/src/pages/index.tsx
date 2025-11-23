@@ -92,20 +92,20 @@ export default function Home() {
               Ready to get started?
             </h3>
             <p className="text-gray-600 mb-8">
-              Choose your role to access the system
+              Search questions or access admin features
             </p>
             <div className="flex justify-center space-x-4">
               <button
-                onClick={() => handleLogin('admin')}
+                onClick={() => router.push('/qpaper')}
                 className="btn-primary text-lg px-8 py-3"
               >
-                Admin Portal
+                Search Questions
               </button>
               <button
-                onClick={() => handleLogin('student')}
+                onClick={() => handleLogin('admin')}
                 className="btn-secondary text-lg px-8 py-3"
               >
-                Student Portal
+                Admin Portal
               </button>
             </div>
           </div>

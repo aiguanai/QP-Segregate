@@ -14,7 +14,13 @@ import nltk
 from nltk.corpus import stopwords
 from nltk.tokenize import word_tokenize, sent_tokenize
 from nltk.stem import WordNetLemmatizer
-from transformers import pipeline
+# Optional transformers (requires torch)
+try:
+    from transformers import pipeline
+    TRANSFORMERS_AVAILABLE = True
+except ImportError:
+    TRANSFORMERS_AVAILABLE = False
+    pipeline = None
 import json
 
 # Download required NLTK data
@@ -44,18 +50,24 @@ class EnhancedClassificationService:
         self.stop_words = set(stopwords.words('english'))
         self.lemmatizer = WordNetLemmatizer()
         
-        # Initialize advanced classification pipeline
-        self.classifier = pipeline(
-            "text-classification",
-            model="distilbert-base-uncased-finetuned-sst-2-english",
-            return_all_scores=True
-        )
-        
-        # Zero-shot classification for better accuracy
-        self.zero_shot_classifier = pipeline(
-            "zero-shot-classification",
-            model="facebook/bart-large-mnli"
-        )
+        # Initialize advanced classification pipeline (optional)
+        self.classifier = None
+        self.zero_shot_classifier = None
+        if TRANSFORMERS_AVAILABLE and pipeline:
+            try:
+                self.classifier = pipeline(
+                    "text-classification",
+                    model="distilbert-base-uncased-finetuned-sst-2-english",
+                    return_all_scores=True
+                )
+                
+                # Zero-shot classification for better accuracy
+                self.zero_shot_classifier = pipeline(
+                    "zero-shot-classification",
+                    model="facebook/bart-large-mnli"
+                )
+            except Exception as e:
+                print(f"⚠️  Transformers pipeline initialization failed: {e}. Continuing without ML models.")
         
         # Bloom's Taxonomy mapping (as proposed)
         self.bloom_levels = {
@@ -244,6 +256,8 @@ class EnhancedClassificationService:
         ]
         
         try:
+            if self.zero_shot_classifier is None:
+                return {i: 0.0 for i in range(1, 7)}
             result = self.zero_shot_classifier(text, labels)
             scores = {}
             for i, (label, score) in enumerate(zip(result['labels'], result['scores'])):

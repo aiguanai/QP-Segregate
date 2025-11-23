@@ -54,11 +54,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const login = async (username: string, password: string, role?: string) => {
     setLoading(true)
     try {
-      const formData = new FormData()
-      formData.append('username', username)
-      formData.append('password', password)
+      // OAuth2PasswordRequestForm expects URL-encoded form data
+      const params = new URLSearchParams()
+      params.append('username', username)
+      params.append('password', password)
 
-      const response = await axios.post('/api/auth/login', formData, {
+      const response = await axios.post('/api/auth/login', params.toString(), {
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded'
         }

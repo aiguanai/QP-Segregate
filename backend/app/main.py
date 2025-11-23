@@ -3,13 +3,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 import os
 
-from app.api import admin, student, auth, courses, proposed_api
+from app.api import admin, student, auth, courses, proposed_api, public
 from app.core.config import settings
 from app.core.database import engine
 from app.models import Base
 
-# Create database tables
-Base.metadata.create_all(bind=engine)
+# Create database tables (if they don't exist)
+try:
+    Base.metadata.create_all(bind=engine)
+except Exception as e:
+    # Tables might already exist, which is fine
+    pass
 
 app = FastAPI(
     title="QPaper AI API",
@@ -42,6 +46,7 @@ app.include_router(admin.router, prefix="/api/admin", tags=["Admin"])
 app.include_router(student.router, prefix="/api/student", tags=["Student"])
 app.include_router(courses.router, prefix="/api/courses", tags=["Courses"])
 app.include_router(proposed_api.router, prefix="/api/proposed", tags=["Proposed System"])
+app.include_router(public.router, prefix="/api/public", tags=["Public"])
 
 @app.get("/")
 async def root():

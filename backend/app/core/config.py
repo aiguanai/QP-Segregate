@@ -3,10 +3,11 @@ from typing import Optional
 import os
 
 class Settings(BaseSettings):
-    # Database - Use cloud URLs if available, fallback to local
-    DATABASE_URL: str = os.getenv("CLOUD_DATABASE_URL", "postgresql://qpaper_user:qpaper_password@localhost:5432/qpaper_ai")
-    MONGODB_URL: str = os.getenv("CLOUD_MONGODB_URL", "mongodb://qpaper_user:qpaper_password@localhost:27017/qpaper_ai?authSource=admin")
-    REDIS_URL: str = os.getenv("CLOUD_REDIS_URL", "redis://localhost:6379")
+    # Database - Reads from .env file or environment variables
+    # Priority: Environment variable > .env file > default
+    DATABASE_URL: str = "postgresql://qpaper_user:qpaper_password@localhost:5432/qpaper_ai"
+    MONGODB_URL: str = "mongodb://qpaper_user:qpaper_password@localhost:27017/qpaper_ai?authSource=admin"
+    REDIS_URL: str = "redis://localhost:6379"
     
     # JWT
     JWT_SECRET_KEY: str = "your-secret-key-change-in-production"

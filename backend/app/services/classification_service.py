@@ -1,24 +1,46 @@
 import spacy
-from sentence_transformers import SentenceTransformer
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
 from typing import List, Dict, Tuple, Optional
 import json
 import re
-from transformers import pipeline
+
+# Lazy imports for ML models (only load when needed)
+_sentence_transformer = None
+_transformers_pipeline = None
+
+def _get_sentence_transformer():
+    """Lazy load SentenceTransformer"""
+    global _sentence_transformer
+    if _sentence_transformer is None:
+        try:
+            from sentence_transformers import SentenceTransformer
+            _sentence_transformer = SentenceTransformer('all-MiniLM-L6-v2')
+        except ImportError:
+            raise ImportError("sentence-transformers not installed. Install with: pip install sentence-transformers")
+    return _sentence_transformer
+
+def _get_classifier():
+    """Lazy load zero-shot classifier"""
+    global _transformers_pipeline
+    if _transformers_pipeline is None:
+        try:
+            from transformers import pipeline
+            _transformers_pipeline = pipeline("zero-shot-classification", 
+                                             model="facebook/bart-large-mnli")
+        except ImportError:
+            raise ImportError("transformers not installed. Install with: pip install transformers")
+    return _transformers_pipeline
 
 class ClassificationService:
     def __init__(self):
         # Load spaCy model
         self.nlp = spacy.load("en_core_web_sm")
         
-        # Load Sentence-BERT model
-        self.sentence_model = SentenceTransformer('all-MiniLM-L6-v2')
-        
-        # Load zero-shot classification model
-        self.classifier = pipeline("zero-shot-classification", 
-                                 model="facebook/bart-large-mnli")
+        # ML models will be loaded lazily when needed
+        self.sentence_model = None
+        self.classifier = None
         
         # Bloom taxonomy keywords
         self.bloom_keywords = {
@@ -112,13 +134,15 @@ class ClassificationService:
         ]
         
         try:
+            if self.classifier is None:
+                self.classifier = _get_classifier()
             result = self.classifier(text, labels)
             scores = {}
             for i, label in enumerate(result['labels']):
                 level = i + 1
                 scores[level] = result['scores'][i]
             return scores
-        except Exception:
+        except (ImportError, Exception) as e:
             # Fallback to equal scores if classification fails
             return {i: 0.0 for i in range(1, 7)}
     
@@ -164,6 +188,8 @@ class ClassificationService:
     
     def generate_embedding(self, text: str) -> np.ndarray:
         """Generate sentence embedding for semantic search"""
+        if self.sentence_model is None:
+            self.sentence_model = _get_sentence_transformer()
         return self.sentence_model.encode(text)
     
     def find_similar_questions(self, question_text: str, course_code: str, 

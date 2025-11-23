@@ -91,7 +91,7 @@ class Question(Base):
     Key Attributes: QuesText, UnitID (FK), PaperID (FK), AITag
     Relationships: Many-to-1 with others
     """
-    __tablename__ = "questions"
+    __tablename__ = "proposed_questions"
     
     ques_id = Column(Integer, primary_key=True, index=True)
     ques_text = Column(Text, nullable=False)

@@ -35,13 +35,15 @@ export default function AdminUpload() {
   })
   const [uploading, setUploading] = useState(false)
   const [processing, setProcessing] = useState(false)
+  const [fileType, setFileType] = useState<'question_paper' | 'syllabus'>('question_paper')
 
   const onDrop = useCallback(async (acceptedFiles: File[]) => {
     if (acceptedFiles.length === 0) return
 
     const file = acceptedFiles[0]
-    if (!file.name.toLowerCase().endsWith('.pdf')) {
-      toast.error('Only PDF files are allowed')
+    const filename = file.name.toLowerCase()
+    if (!filename.endsWith('.pdf') && !filename.endsWith('.docx') && !filename.endsWith('.doc')) {
+      toast.error('Only PDF and DOCX files are allowed')
       return
     }
 
@@ -49,8 +51,9 @@ export default function AdminUpload() {
     try {
       const formData = new FormData()
       formData.append('file', file)
+      formData.append('file_type', fileType)
 
-      const response = await fetch('/api/admin/upload-pdf', {
+      const response = await fetch('/api/admin/upload-file', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('token')}`
@@ -59,7 +62,8 @@ export default function AdminUpload() {
       })
 
       if (!response.ok) {
-        throw new Error('Upload failed')
+        const errorData = await response.json().catch(() => ({ detail: 'Upload failed' }))
+        throw new Error(errorData.detail || 'Upload failed')
       }
 
       const result = await response.json()
@@ -69,18 +73,20 @@ export default function AdminUpload() {
         pageCount: result.page_count,
         fileSize: result.file_size
       })
-      toast.success('PDF uploaded successfully!')
-    } catch (error) {
-      toast.error('Upload failed. Please try again.')
+      toast.success(`${result.file_type.toUpperCase()} uploaded successfully!`)
+    } catch (error: any) {
+      toast.error(error.message || 'Upload failed. Please try again.')
     } finally {
       setUploading(false)
     }
-  }, [])
+  }, [fileType])
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
     accept: {
-      'application/pdf': ['.pdf']
+      'application/pdf': ['.pdf'],
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx'],
+      'application/msword': ['.doc']
     },
     multiple: false,
     disabled: uploadState.step !== 'upload'
@@ -88,6 +94,13 @@ export default function AdminUpload() {
 
   const handleMetadataSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    
+    // Validate required fields based on file type
+    if (fileType === 'question_paper' && !metadata.exam_type) {
+      toast.error('Exam type is required for question papers')
+      return
+    }
+    
     setProcessing(true)
 
     try {
@@ -99,7 +112,9 @@ export default function AdminUpload() {
         },
         body: JSON.stringify({
           upload_id: uploadState.uploadId,
-          ...metadata
+          file_type: fileType,
+          ...metadata,
+          exam_type: fileType === 'question_paper' ? metadata.exam_type : undefined
         })
       })
 
@@ -194,10 +209,41 @@ export default function AdminUpload() {
         </header>
 
         <main className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-          {/* Step 1: PDF Upload */}
+          {/* Step 1: File Upload */}
           {uploadState.step === 'upload' && (
             <div className="card">
-              <h2 className="text-lg font-semibold text-gray-900 mb-4">Step 1: Upload PDF</h2>
+              <h2 className="text-lg font-semibold text-gray-900 mb-4">Step 1: Upload File</h2>
+              
+              {/* File Type Selector */}
+              <div className="mb-6">
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  File Type
+                </label>
+                <div className="flex space-x-4">
+                  <label className="flex items-center">
+                    <input
+                      type="radio"
+                      name="file_type"
+                      value="question_paper"
+                      checked={fileType === 'question_paper'}
+                      onChange={(e) => setFileType(e.target.value as 'question_paper' | 'syllabus')}
+                      className="mr-2"
+                    />
+                    <span>Question Paper</span>
+                  </label>
+                  <label className="flex items-center">
+                    <input
+                      type="radio"
+                      name="file_type"
+                      value="syllabus"
+                      checked={fileType === 'syllabus'}
+                      onChange={(e) => setFileType(e.target.value as 'question_paper' | 'syllabus')}
+                      className="mr-2"
+                    />
+                    <span>Syllabus</span>
+                  </label>
+                </div>
+              </div>
               
               <div
                 {...getRootProps()}
@@ -216,10 +262,10 @@ export default function AdminUpload() {
                 ) : (
                   <div>
                     <p className="text-gray-600 mb-2">
-                      Drag & drop a PDF file here, or click to browse
+                      Drag & drop a PDF or DOCX file here, or click to browse
                     </p>
                     <p className="text-sm text-gray-500">
-                      Only PDF files are supported
+                      Supported formats: PDF, DOCX (OCR will be applied for image-based PDFs)
                     </p>
                   </div>
                 )}
@@ -239,7 +285,7 @@ export default function AdminUpload() {
                 <div className="flex items-center">
                   <DocumentTextIcon className="h-5 w-5 text-green-600 mr-2" />
                   <div>
-                    <p className="text-sm font-medium text-green-800">PDF uploaded successfully</p>
+                    <p className="text-sm font-medium text-green-800">File uploaded successfully</p>
                     <p className="text-xs text-green-600">
                       {uploadState.pageCount} pages • {(uploadState.fileSize! / 1024 / 1024).toFixed(1)} MB
                     </p>
@@ -308,25 +354,27 @@ export default function AdminUpload() {
                     </select>
                   </div>
 
-                  <div>
-                    <label htmlFor="exam_type" className="block text-sm font-medium text-gray-700">
-                      Exam Type *
-                    </label>
-                    <select
-                      id="exam_type"
-                      name="exam_type"
-                      required
-                      className="input-field mt-1"
-                      value={metadata.exam_type}
-                      onChange={handleChange}
-                    >
-                      <option value="">Select Exam Type</option>
-                      <option value="CIE 1">CIE 1 (Continuous Internal Evaluation 1)</option>
-                      <option value="CIE 2">CIE 2 (Continuous Internal Evaluation 2)</option>
-                      <option value="Improvement CIE">Improvement CIE (Re-test for CIE)</option>
-                      <option value="SEE">SEE (Semester End Examination)</option>
-                    </select>
-                  </div>
+                  {fileType === 'question_paper' && (
+                    <div>
+                      <label htmlFor="exam_type" className="block text-sm font-medium text-gray-700">
+                        Exam Type *
+                      </label>
+                      <select
+                        id="exam_type"
+                        name="exam_type"
+                        required
+                        className="input-field mt-1"
+                        value={metadata.exam_type}
+                        onChange={handleChange}
+                      >
+                        <option value="">Select Exam Type</option>
+                        <option value="CIE 1">CIE 1 (Continuous Internal Evaluation 1)</option>
+                        <option value="CIE 2">CIE 2 (Continuous Internal Evaluation 2)</option>
+                        <option value="Improvement CIE">Improvement CIE (Re-test for CIE)</option>
+                        <option value="SEE">SEE (Semester End Examination)</option>
+                      </select>
+                    </div>
+                  )}
 
                   <div className="sm:col-span-2">
                     <label htmlFor="exam_date" className="block text-sm font-medium text-gray-700">

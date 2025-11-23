@@ -20,9 +20,15 @@ from pymongo import MongoClient
 engine = create_engine(settings.DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-# MongoDB connection
-mongo_client = MongoClient(settings.MONGODB_URL)
-mongo_db = mongo_client.qpaper_ai
+# MongoDB connection (optional)
+mongo_client = None
+mongo_db = None
+if settings.MONGODB_URL and settings.MONGODB_URL.strip():
+    try:
+        mongo_client = MongoClient(settings.MONGODB_URL)
+        mongo_db = mongo_client.qpaper_ai
+    except Exception as e:
+        print(f"⚠️  MongoDB connection failed: {e}. Continuing without MongoDB.")
 
 # Initialize services
 ocr_service = OCRService()
@@ -94,13 +100,20 @@ def process_question_paper(self, paper_id: int):
         db.close()
 
 def process_ocr(paper: QuestionPaper) -> Dict:
-    """Process PDF with OCR using local cloud storage"""
+    """Process PDF or DOCX with OCR using local cloud storage"""
     # Create output directory for page images
     output_dir = os.path.join(settings.PAGE_IMAGES_DIR, f"paper_{paper.paper_id}")
     os.makedirs(output_dir, exist_ok=True)
     
-    # Extract text from PDF
-    ocr_results = ocr_service.extract_text_from_pdf(paper.pdf_path, output_dir)
+    # Check file type
+    file_path = paper.pdf_path
+    file_ext = os.path.splitext(file_path)[1].lower() if file_path else ''
+    
+    # Extract text from PDF or DOCX
+    if file_ext in ['.docx', '.doc']:
+        ocr_results = ocr_service.extract_text_from_docx(file_path)
+    else:
+        ocr_results = ocr_service.extract_text_from_pdf(file_path, output_dir)
     
     # Upload processed images to local cloud storage
     for i, page in enumerate(ocr_results['pages']):
@@ -176,36 +189,46 @@ def classify_questions(questions: List[Dict], course_code: str) -> List[Dict]:
     return classified_questions
 
 def detect_duplicates(questions: List[Dict], course_code: str) -> List[Dict]:
-    """Detect and group similar questions"""
-    # Get existing embeddings for the course
+    """Detect and group similar questions (same answer, different wording)"""
+    # Get existing canonical questions for the course
     existing_embeddings = []
     existing_question_ids = []
     
-    # Query existing questions for the course
+    # Query existing canonical questions for the course
     db = SessionLocal()
-    existing_questions = db.query(Question).filter(Question.course_code == course_code).all()
+    existing_questions = db.query(Question).filter(
+        Question.course_code == course_code,
+        Question.is_canonical == True
+    ).all()
     
+    # Generate embeddings for existing questions
     for eq in existing_questions:
-        # Get embedding from vector database (Pinecone/Qdrant)
-        # For now, we'll skip this and treat all as new
-        pass
+        try:
+            embedding = classification_service.generate_embedding(eq.question_text)
+            existing_embeddings.append(embedding)
+            existing_question_ids.append(eq.question_id)
+        except Exception as e:
+            # If embedding generation fails, skip this question
+            print(f"Failed to generate embedding for question {eq.question_id}: {e}")
+            continue
     
     deduplicated = []
     
+    # Compare new questions with existing ones
     for question in questions:
-        # Find similar questions
+        # Find similar questions using semantic similarity
         similar_questions = classification_service.find_similar_questions(
             question['question_text'], course_code, existing_embeddings
         )
         
         if similar_questions:
-            # Group with existing question
-            parent_id = similar_questions[0][0]  # Most similar question ID
+            # Group with existing canonical question (variant detected)
+            parent_id = existing_question_ids[similar_questions[0][0]]  # Most similar question ID
             question['is_canonical'] = False
             question['parent_question_id'] = parent_id
             question['similarity_score'] = similar_questions[0][1]
         else:
-            # New canonical question
+            # New canonical question (no similar questions found)
             question['is_canonical'] = True
             question['parent_question_id'] = None
             question['similarity_score'] = None

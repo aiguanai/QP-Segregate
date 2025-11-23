@@ -24,8 +24,14 @@ engine = create_engine(settings.DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 # MongoDB connection for raw data storage
-mongo_client = MongoClient(settings.MONGODB_URL)
-mongo_db = mongo_client.qpaper_ai
+# MongoDB connection (optional)
+mongo_client = None
+if settings.MONGODB_URL and settings.MONGODB_URL.strip():
+    try:
+        mongo_client = MongoClient(settings.MONGODB_URL)
+    except Exception as e:
+        print(f"⚠️  MongoDB connection failed: {e}. Continuing without MongoDB.")
+mongo_db = mongo_client.qpaper_ai if mongo_client else None
 
 # Initialize services
 ocr_service = OCRService()
