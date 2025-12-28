@@ -35,7 +35,7 @@ from pathlib import Path
 import logging
 
 from app.core.config import settings
-from app.models.proposed_schema import QPaper, Question, Unit, Subject, Semester
+from app.models.proposed_schema import QPaper, ProposedQuestion, Unit, Subject, Semester
 from app.tasks.processing import process_question_paper
 from app.core.database import SessionLocal
 

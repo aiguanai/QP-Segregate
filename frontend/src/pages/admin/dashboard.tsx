@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import Head from 'next/head'
 import { useAuth } from '../../hooks/useAuth'
 import { useRouter } from 'next/router'
+import { api } from '../../utils/api'
 import { 
   DocumentTextIcon, 
   QuestionMarkCircleIcon, 
@@ -35,13 +36,8 @@ export default function AdminDashboard() {
 
   const fetchDashboardStats = async () => {
     try {
-      const response = await fetch('/api/admin/analytics/dashboard', {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        }
-      })
-      const data = await response.json()
-      setStats(data)
+      const response = await api.get('/api/admin/analytics/dashboard')
+      setStats(response.data)
     } catch (error) {
       console.error('Failed to fetch dashboard stats:', error)
     } finally {

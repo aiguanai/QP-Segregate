@@ -327,24 +327,42 @@ async def get_analytics_dashboard(
     current_user: User = Depends(get_current_user)
 ):
     """Get analytics dashboard data"""
-    if current_user.role != "ADMIN":
-        raise HTTPException(status_code=403, detail="Admin access required")
-    
-    # Get basic statistics
-    total_papers = db.query(QuestionPaper).count()
-    total_questions = db.query(Question).count()
-    pending_reviews = db.query(ReviewQueue).filter(ReviewQueue.status == "PENDING").count()
-    
-    # Get Bloom taxonomy distribution
-    bloom_distribution = db.query(Question.bloom_category, db.func.count(Question.question_id)).group_by(Question.bloom_category).all()
-    
-    # Get course-wise breakdown
-    course_breakdown = db.query(QuestionPaper.course_code, db.func.count(QuestionPaper.paper_id)).group_by(QuestionPaper.course_code).all()
-    
-    return {
-        "total_papers": total_papers,
-        "total_questions": total_questions,
-        "pending_reviews": pending_reviews,
-        "bloom_distribution": dict(bloom_distribution),
-        "course_breakdown": dict(course_breakdown)
-    }
+    try:
+        if current_user.role != "ADMIN":
+            raise HTTPException(status_code=403, detail="Admin access required")
+        
+        # Get basic statistics
+        total_papers = db.query(QuestionPaper).count()
+        total_questions = db.query(Question).count()
+        pending_reviews = db.query(ReviewQueue).filter(ReviewQueue.status == "PENDING").count()
+        
+        # Get Bloom taxonomy distribution (handle empty database)
+        try:
+            bloom_results = db.query(Question.bloom_category, db.func.count(Question.question_id)).group_by(Question.bloom_category).all()
+            bloom_distribution = {str(category or "Unknown"): count for category, count in bloom_results}
+        except Exception as e:
+            sys.stderr.write(f"⚠️  Error getting bloom distribution: {e}\n")
+            bloom_distribution = {}
+        
+        # Get course-wise breakdown (handle empty database)
+        try:
+            course_results = db.query(QuestionPaper.course_code, db.func.count(QuestionPaper.paper_id)).group_by(QuestionPaper.course_code).all()
+            course_breakdown = {str(code or "Unknown"): count for code, count in course_results}
+        except Exception as e:
+            sys.stderr.write(f"⚠️  Error getting course breakdown: {e}\n")
+            course_breakdown = {}
+        
+        return {
+            "total_papers": total_papers,
+            "total_questions": total_questions,
+            "pending_reviews": pending_reviews,
+            "bloom_distribution": bloom_distribution,
+            "course_breakdown": course_breakdown
+        }
+    except Exception as e:
+        import traceback
+        import sys
+        sys.stderr.write(f"❌ Error in get_analytics_dashboard: {e}\n")
+        traceback.print_exc(file=sys.stderr)
+        sys.stderr.flush()
+        raise HTTPException(status_code=500, detail=f"Error fetching dashboard data: {str(e)}")

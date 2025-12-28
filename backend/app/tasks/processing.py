@@ -30,9 +30,16 @@ if settings.MONGODB_URL and settings.MONGODB_URL.strip():
     except Exception as e:
         print(f"⚠️  MongoDB connection failed: {e}. Continuing without MongoDB.")
 
-# Initialize services
+# Initialize services (lazy initialization for classification service)
 ocr_service = OCRService()
-classification_service = ClassificationService()
+classification_service = None  # Will be initialized on first use
+
+def get_classification_service():
+    """Lazy initialization of classification service"""
+    global classification_service
+    if classification_service is None:
+        classification_service = ClassificationService()
+    return classification_service
 
 @celery.task(bind=True)
 def process_question_paper(self, paper_id: int):
@@ -156,16 +163,17 @@ def classify_questions(questions: List[Dict], course_code: str) -> List[Dict]:
     
     classified_questions = []
     
+    cls_service = get_classification_service()
     for question in questions:
         # Unit classification
-        unit_id, unit_confidence = classification_service.classify_unit(
+        unit_id, unit_confidence = cls_service.classify_unit(
             question['question_text'], course_code, syllabus
         )
         question['unit_id'] = unit_id
         question['unit_confidence'] = unit_confidence
         
         # Bloom taxonomy classification
-        bloom_level, bloom_category, bloom_confidence = classification_service.classify_bloom_taxonomy(
+        bloom_level, bloom_category, bloom_confidence = cls_service.classify_bloom_taxonomy(
             question['question_text']
         )
         question['bloom_level'] = bloom_level
@@ -173,15 +181,15 @@ def classify_questions(questions: List[Dict], course_code: str) -> List[Dict]:
         question['bloom_confidence'] = bloom_confidence
         
         # Difficulty estimation
-        difficulty = classification_service.estimate_difficulty(question)
+        difficulty = cls_service.estimate_difficulty(question)
         question['difficulty_level'] = difficulty
         
         # Extract features
-        features = classification_service.extract_question_features(question['question_text'])
+        features = cls_service.extract_question_features(question['question_text'])
         question.update(features)
         
         # Generate embedding
-        embedding = classification_service.generate_embedding(question['question_text'])
+        embedding = cls_service.generate_embedding(question['question_text'])
         question['embedding'] = embedding.tolist()
         
         classified_questions.append(question)
@@ -202,9 +210,10 @@ def detect_duplicates(questions: List[Dict], course_code: str) -> List[Dict]:
     ).all()
     
     # Generate embeddings for existing questions
+    cls_service = get_classification_service()
     for eq in existing_questions:
         try:
-            embedding = classification_service.generate_embedding(eq.question_text)
+            embedding = cls_service.generate_embedding(eq.question_text)
             existing_embeddings.append(embedding)
             existing_question_ids.append(eq.question_id)
         except Exception as e:
@@ -217,7 +226,7 @@ def detect_duplicates(questions: List[Dict], course_code: str) -> List[Dict]:
     # Compare new questions with existing ones
     for question in questions:
         # Find similar questions using semantic similarity
-        similar_questions = classification_service.find_similar_questions(
+        similar_questions = cls_service.find_similar_questions(
             question['question_text'], course_code, existing_embeddings
         )
         

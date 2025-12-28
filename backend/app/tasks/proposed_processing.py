@@ -7,7 +7,7 @@ from celery import current_task
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy import create_engine
 from app.core.config import settings
-from app.models.proposed_schema import QPaper, Question, Unit, Subject, Semester
+from app.models.proposed_schema import QPaper, ProposedQuestion, Unit, Subject, Semester
 from app.services.enhanced_classification_service import enhanced_classification_service
 from app.services.ocr_service import OCRService
 from app.core.local_cloud_storage import local_cloud_storage
@@ -198,7 +198,7 @@ def save_questions_proposed(questions: List[Dict], paper: QPaper, db):
     """
     for question_data in questions:
         # Create Question record as specified in proposed schema
-        question = Question(
+        question = ProposedQuestion(
             ques_text=question_data['question_text'],
             unit_id=question_data.get('unit_id'),
             paper_id=paper.paper_id,
@@ -256,7 +256,7 @@ def create_structured_question_bank():
         db.commit()
         
         # QUESTION table (Central table as proposed)
-        question = Question(
+        question = ProposedQuestion(
             ques_text="What is a database management system?",
             unit_id=unit.unit_id,
             paper_id=qpaper.paper_id,

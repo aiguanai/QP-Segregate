@@ -7,7 +7,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from app.core.database import get_db
-from app.models.proposed_schema import Semester, Subject, Unit, QPaper, Question
+# Lazy import to avoid model conflicts at startup
+# Only import when this router is actually used
+def get_proposed_models():
+    """Lazy import of proposed schema models"""
+    from app.models.proposed_schema import Semester, Subject, Unit, QPaper, ProposedQuestion
+    return Semester, Subject, Unit, QPaper, ProposedQuestion
 from app.services.ingestion_service import ingestion_service
 from app.tasks.proposed_processing import process_question_paper_proposed, create_structured_question_bank
 from pydantic import BaseModel
@@ -115,7 +120,7 @@ async def search_questions(
     """
     try:
         # Build query based on proposed schema
-        query = db.query(Question).join(QPaper).join(Unit).join(Subject).join(Semester)
+        query = db.query(ProposedQuestion).join(QPaper).join(Unit).join(Subject).join(Semester)
         
         if subject_name:
             query = query.filter(Subject.sub_name.ilike(f"%{subject_name}%"))
@@ -127,10 +132,10 @@ async def search_questions(
             query = query.filter(Unit.unit_name.ilike(f"%{unit_name}%"))
         
         if keywords:
-            query = query.filter(Question.ques_text.ilike(f"%{keywords}%"))
+            query = query.filter(ProposedQuestion.ques_text.ilike(f"%{keywords}%"))
         
         if ai_tag:
-            query = query.filter(Question.ai_tag.ilike(f"%{ai_tag}%"))
+            query = query.filter(ProposedQuestion.ai_tag.ilike(f"%{ai_tag}%"))
         
         questions = query.limit(100).all()
         
@@ -162,7 +167,7 @@ async def get_question(question_id: int, db: Session = Depends(get_db)):
     Get specific question details
     """
     try:
-        question = db.query(Question).filter(Question.ques_id == question_id).first()
+        question = db.query(ProposedQuestion).filter(ProposedQuestion.ques_id == question_id).first()
         if not question:
             raise HTTPException(status_code=404, detail="Question not found")
         
@@ -266,7 +271,7 @@ async def get_system_overview(db: Session = Depends(get_db)):
         subject_count = db.query(Subject).count()
         unit_count = db.query(Unit).count()
         paper_count = db.query(QPaper).count()
-        question_count = db.query(Question).count()
+        question_count = db.query(ProposedQuestion).count()
         
         # Processing status breakdown
         processing_status = db.query(QPaper.processing_status).group_by(QPaper.processing_status).all()

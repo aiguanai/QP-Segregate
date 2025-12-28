@@ -1,9 +1,15 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse
 import os
+import traceback
 
-from app.api import admin, student, auth, courses, proposed_api, public
+from app.api import admin, student, auth, courses, public
+# Don't import proposed_api at startup to avoid SQLAlchemy model conflicts
+# It will be imported lazily if needed
+PROPOSED_API_AVAILABLE = False
+proposed_api = None
 from app.core.config import settings
 from app.core.database import engine
 from app.models import Base
@@ -45,16 +51,41 @@ app.include_router(auth.router, prefix="/api/auth", tags=["Authentication"])
 app.include_router(admin.router, prefix="/api/admin", tags=["Admin"])
 app.include_router(student.router, prefix="/api/student", tags=["Student"])
 app.include_router(courses.router, prefix="/api/courses", tags=["Courses"])
-app.include_router(proposed_api.router, prefix="/api/proposed", tags=["Proposed System"])
+# Proposed API disabled to avoid SQLAlchemy model conflicts
+# Uncomment below if you need the proposed API endpoints
+# try:
+#     from app.api import proposed_api
+#     app.include_router(proposed_api.router, prefix="/api/proposed", tags=["Proposed System"])
+# except Exception as e:
+#     print(f"⚠️  Proposed API not available: {e}")
 app.include_router(public.router, prefix="/api/public", tags=["Public"])
 
 @app.get("/")
 async def root():
+    print("🌐 Root endpoint accessed")
     return {"message": "QPaper AI API is running"}
 
 @app.get("/health")
 async def health_check():
     return {"status": "healthy", "version": "1.0.0"}
+
+# Global exception handler to ensure CORS headers are always sent
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    import sys
+    sys.stderr.write(f"❌ Unhandled exception: {exc}\n")
+    traceback.print_exc(file=sys.stderr)
+    sys.stderr.flush()
+    return JSONResponse(
+        status_code=500,
+        content={"detail": str(exc), "type": type(exc).__name__},
+        headers={
+            "Access-Control-Allow-Origin": "http://localhost:3000",
+            "Access-Control-Allow-Credentials": "true",
+            "Access-Control-Allow-Methods": "*",
+            "Access-Control-Allow-Headers": "*",
+        }
+    )
 
 if __name__ == "__main__":
     import uvicorn

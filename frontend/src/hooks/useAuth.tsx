@@ -1,7 +1,7 @@
 import { useState, useEffect, createContext, useContext } from 'react'
 import { useRouter } from 'next/router'
-import axios from 'axios'
 import toast from 'react-hot-toast'
+import { api } from '../utils/api'
 
 interface User {
   user_id: number
@@ -38,14 +38,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const verifyToken = async () => {
     try {
-      const response = await axios.get('/api/auth/me', {
-        headers: {
-          Authorization: `Bearer ${localStorage.getItem('token')}`
-        }
-      })
+      const response = await api.get('/api/auth/me')
       setUser(response.data)
     } catch (error) {
       localStorage.removeItem('token')
+      setUser(null)
     } finally {
       setLoading(false)
     }
@@ -59,7 +56,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       params.append('username', username)
       params.append('password', password)
 
-      const response = await axios.post('/api/auth/login', params.toString(), {
+      const response = await api.post('/api/auth/login', params.toString(), {
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded'
         }
@@ -69,12 +66,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       localStorage.setItem('token', access_token)
 
       // Get user info
-      const userResponse = await axios.get('/api/auth/me', {
-        headers: {
-          Authorization: `Bearer ${access_token}`
-        }
-      })
-
+      const userResponse = await api.get('/api/auth/me')
       setUser(userResponse.data)
       toast.success('Login successful!')
     } catch (error: any) {

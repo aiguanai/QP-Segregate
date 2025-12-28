@@ -3,6 +3,7 @@ import Head from 'next/head'
 import { useRouter } from 'next/router'
 import { useDropzone } from 'react-dropzone'
 import { useAuth } from '../../hooks/useAuth'
+import { api } from '../../utils/api'
 import { 
   DocumentTextIcon, 
   CloudArrowUpIcon,
@@ -53,20 +54,11 @@ export default function AdminUpload() {
       formData.append('file', file)
       formData.append('file_type', fileType)
 
-      const response = await fetch('/api/admin/upload-file', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        },
-        body: formData
-      })
+      // For FormData, axios should set Content-Type automatically (including boundary)
+      // Don't manually set Content-Type, let the browser set it with the boundary
+      const response = await api.post('/api/admin/upload-file', formData)
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ detail: 'Upload failed' }))
-        throw new Error(errorData.detail || 'Upload failed')
-      }
-
-      const result = await response.json()
+      const result = response.data
       setUploadState({
         step: 'metadata',
         uploadId: result.upload_id,
@@ -104,25 +96,14 @@ export default function AdminUpload() {
     setProcessing(true)
 
     try {
-      const response = await fetch('/api/admin/submit-metadata', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        },
-        body: JSON.stringify({
-          upload_id: uploadState.uploadId,
-          file_type: fileType,
-          ...metadata,
-          exam_type: fileType === 'question_paper' ? metadata.exam_type : undefined
-        })
+      const response = await api.post('/api/admin/submit-metadata', {
+        upload_id: uploadState.uploadId,
+        file_type: fileType,
+        ...metadata,
+        exam_type: fileType === 'question_paper' ? metadata.exam_type : undefined
       })
 
-      if (!response.ok) {
-        throw new Error('Metadata submission failed')
-      }
-
-      const result = await response.json()
+      const result = response.data
       setUploadState({
         ...uploadState,
         step: 'processing',
@@ -143,15 +124,8 @@ export default function AdminUpload() {
   const pollProcessingStatus = async (paperId: number) => {
     const pollInterval = setInterval(async () => {
       try {
-        const response = await fetch(`/api/admin/processing-status/${paperId}`, {
-          headers: {
-            'Authorization': `Bearer ${localStorage.getItem('token')}`
-          }
-        })
-
-        if (!response.ok) return
-
-        const status = await response.json()
+        const response = await api.get(`/api/admin/processing-status/${paperId}`)
+        const status = response.data
         setUploadState(prev => ({
           ...prev,
           progress: status.progress,

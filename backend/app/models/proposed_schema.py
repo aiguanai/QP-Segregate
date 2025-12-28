@@ -61,7 +61,7 @@ class Unit(Base):
     
     # Relationships
     subject = relationship("Subject", back_populates="units")
-    questions = relationship("Question", back_populates="unit")
+    questions = relationship("ProposedQuestion", back_populates="unit")
 
 class QPaper(Base):
     """
@@ -82,9 +82,9 @@ class QPaper(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     
     # Relationships
-    questions = relationship("Question", back_populates="paper")
+    questions = relationship("ProposedQuestion", back_populates="paper")
 
-class Question(Base):
+class ProposedQuestion(Base):
     """
     QUESTION table as proposed - Central Table
     Primary Key: QuesID
@@ -112,5 +112,5 @@ __all__ = [
     "Subject", 
     "Unit",
     "QPaper",
-    "Question"
+    "ProposedQuestion"
 ]

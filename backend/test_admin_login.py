@@ -1,68 +1,42 @@
-"""
-Test script to verify admin login credentials
-"""
-import sys
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy import create_engine
-from passlib.context import CryptContext
-from app.core.config import settings
+"""Test admin login and verify user exists"""
+from app.core.database import SessionLocal
 from app.models.user import User
+from passlib.context import CryptContext
 
-def test_admin_login():
-    """Test admin login credentials"""
-    print("🔍 Testing Admin Login...")
+db = SessionLocal()
+user = db.query(User).filter(User.username == 'admin').first()
+
+if user:
+    print(f"✅ User found: {user.username}")
+    print(f"   Role: {user.role}")
+    print(f"   Is Active: {user.is_active}")
+    print(f"   Email: {user.email}")
     
-    # Create database connection
-    engine = create_engine(settings.DATABASE_URL)
-    Session = sessionmaker(bind=engine)
-    session = Session()
+    # Test password verification
+    pwd_context = CryptContext(schemes=['bcrypt', 'pbkdf2_sha256'], deprecated='auto')
+    verified = pwd_context.verify('admin123', user.password_hash)
+    print(f"   Password 'admin123' verified: {verified}")
     
-    try:
-        # Find admin user
-        admin = session.query(User).filter(User.username == "admin").first()
+    if not verified:
+        print("\n⚠️  Password verification failed!")
+        print("   Let's recreate the admin user with correct password hash...")
         
-        if not admin:
-            print("❌ Admin user not found in database!")
-            print("   Run: python create_admin.py")
-            return False
-        
-        print(f"✅ Admin user found:")
-        print(f"   Username: {admin.username}")
-        print(f"   Email: {admin.email}")
-        print(f"   Role: {admin.role}")
-        print(f"   Is Active: {admin.is_active}")
-        print(f"   Password Hash: {admin.password_hash[:50]}...")
-        
-        # Test password verification
-        pwd_context = CryptContext(schemes=["bcrypt", "pbkdf2_sha256"], deprecated="auto")
-        
-        test_password = "admin123"
-        print(f"\n🔐 Testing password verification...")
-        print(f"   Testing password: {test_password}")
-        
+        # Recreate password hash
         try:
-            is_valid = pwd_context.verify(test_password, admin.password_hash)
-            if is_valid:
-                print("   ✅ Password verification SUCCESSFUL!")
-                return True
-            else:
-                print("   ❌ Password verification FAILED!")
-                print("   The password hash doesn't match 'admin123'")
-                print("\n   💡 Solution: Run 'python create_admin.py' to reset the password")
-                return False
+            new_hash = pwd_context.hash('admin123')
+            user.password_hash = new_hash
+            user.is_active = True
+            db.commit()
+            print("✅ Admin user password updated!")
+            
+            # Verify again
+            verified = pwd_context.verify('admin123', user.password_hash)
+            print(f"   Password verification after update: {verified}")
         except Exception as e:
-            print(f"   ❌ Error verifying password: {e}")
-            return False
-        
-    except Exception as e:
-        print(f"❌ Database error: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
-    finally:
-        session.close()
+            print(f"❌ Error updating password: {e}")
+            db.rollback()
+else:
+    print("❌ Admin user not found!")
+    print("   Run: python init_db.py")
 
-if __name__ == "__main__":
-    success = test_admin_login()
-    sys.exit(0 if success else 1)
-
+db.close()

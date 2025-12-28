@@ -4,7 +4,7 @@ echo =====================================================
 
 echo 📋 Step 1: Creating environment file...
 if not exist "backend\.env" (
-    copy "backend\env.template" "backend\.env"
+    copy "backend\env.example" "backend\.env"
     echo ✅ Created backend\.env from template
     echo.
     echo ⚠️  IMPORTANT: Edit backend\.env with your cloud database URLs
