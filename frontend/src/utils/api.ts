@@ -32,10 +32,15 @@ api.interceptors.request.use(
 api.interceptors.response.use(
   (response) => response,
   (error) => {
+    // Only handle 401 errors, but don't automatically redirect
+    // Let the components handle the redirect logic
     if (error.response?.status === 401) {
-      // Token expired or invalid
-      localStorage.removeItem('token')
-      window.location.href = '/admin/login'
+      // Token expired or invalid - remove token but don't redirect here
+      // Components will handle redirect based on context
+      const token = localStorage.getItem('token')
+      if (token) {
+        localStorage.removeItem('token')
+      }
     }
     return Promise.reject(error)
   }

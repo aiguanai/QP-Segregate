@@ -1,36 +1,30 @@
 import { useState } from 'react'
 import { useRouter } from 'next/router'
 import Head from 'next/head'
-import { EyeIcon, EyeSlashIcon } from '@heroicons/react/24/outline'
+import Image from 'next/image'
+import { GoogleLogin } from '@react-oauth/google'
 import { useAuth } from '../../hooks/useAuth'
+import ThemeToggle from '../../components/ThemeToggle'
+import { useTheme } from '../../hooks/useTheme'
 
 export default function StudentLogin() {
   const router = useRouter()
-  const { login, loading } = useAuth()
-  const [formData, setFormData] = useState({
-    username: '',
-    password: ''
-  })
-  const [showPassword, setShowPassword] = useState(false)
+  const { googleLogin, loading } = useAuth()
+  const { resolvedTheme } = useTheme()
   const [error, setError] = useState('')
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
+  const handleGoogleSuccess = async (credentialResponse: any) => {
     setError('')
-
     try {
-      await login(formData.username, formData.password, 'STUDENT')
+      await googleLogin(credentialResponse.credential)
       router.push('/student/dashboard')
     } catch (err: any) {
-      setError(err.message || 'Login failed')
+      setError(err.message || 'Google login failed')
     }
   }
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setFormData({
-      ...formData,
-      [e.target.name]: e.target.value
-    })
+  const handleGoogleError = () => {
+    setError('Google sign-in failed. Please try again.')
   }
 
   return (
@@ -39,83 +33,64 @@ export default function StudentLogin() {
         <title>Student Login - QPaper AI</title>
       </Head>
 
-      <div className="min-h-screen bg-gradient-to-br from-primary-50 to-secondary-50 flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8">
+      <div className="min-h-screen bg-gradient-to-br from-primary-50 to-secondary-50 dark:from-gray-900 dark:to-gray-800 flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8 transition-colors">
         <div className="max-w-md w-full space-y-8">
-          <div>
-            <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900">
+          <div className="flex justify-end">
+            <ThemeToggle />
+          </div>
+          <div className="flex flex-col items-center">
+            <Image
+              src={resolvedTheme === 'dark' ? '/RVlogodark.png' : '/RVlogolight.png'}
+              alt="RVCE Logo"
+              width={100}
+              height={100}
+              className="h-auto mb-4"
+              priority
+            />
+            <Image
+              src="/logo.png"
+              alt="QPaper AI Logo"
+              width={250}
+              height={75}
+              className="h-auto mb-6"
+              priority
+            />
+            <h2 className="text-center text-3xl font-extrabold text-gray-900 dark:text-white">
               Student Login
             </h2>
-            <p className="mt-2 text-center text-sm text-gray-600">
-              Sign in to access your question bank
+            <p className="mt-2 text-center text-sm text-gray-600 dark:text-gray-300">
+              Sign in with your RVCE Google account to access your question bank
+            </p>
+            <p className="mt-1 text-center text-xs text-gray-500 dark:text-gray-400">
+              Only @rvce.edu.in email addresses are allowed
             </p>
           </div>
 
-          <form className="mt-8 space-y-6" onSubmit={handleSubmit}>
+          <div className="mt-8">
             <div className="card">
-              <div className="space-y-4">
-                <div>
-                  <label htmlFor="username" className="block text-sm font-medium text-gray-700">
-                    Username
-                  </label>
-                  <input
-                    id="username"
-                    name="username"
-                    type="text"
-                    required
-                    className="input-field mt-1"
-                    placeholder="Enter your username"
-                    value={formData.username}
-                    onChange={handleChange}
-                  />
-                </div>
-
-                <div>
-                  <label htmlFor="password" className="block text-sm font-medium text-gray-700">
-                    Password
-                  </label>
-                  <div className="relative mt-1">
-                    <input
-                      id="password"
-                      name="password"
-                      type={showPassword ? 'text' : 'password'}
-                      required
-                      className="input-field pr-10"
-                      placeholder="Enter your password"
-                      value={formData.password}
-                      onChange={handleChange}
-                    />
-                    <button
-                      type="button"
-                      className="absolute inset-y-0 right-0 pr-3 flex items-center"
-                      onClick={() => setShowPassword(!showPassword)}
-                    >
-                      {showPassword ? (
-                        <EyeSlashIcon className="h-5 w-5 text-gray-400" />
-                      ) : (
-                        <EyeIcon className="h-5 w-5 text-gray-400" />
-                      )}
-                    </button>
-                  </div>
-                </div>
-              </div>
-
               {error && (
-                <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg">
-                  <p className="text-sm text-red-600">{error}</p>
+                <div className="mb-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
+                  <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
                 </div>
               )}
 
-              <div className="mt-6">
-                <button
-                  type="submit"
-                  disabled={loading}
-                  className="w-full btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {loading ? 'Signing in...' : 'Sign In'}
-                </button>
+              <div className="flex flex-col items-center justify-center space-y-4">
+                <GoogleLogin
+                  onSuccess={handleGoogleSuccess}
+                  onError={handleGoogleError}
+                  useOneTap={false}
+                  theme="outline"
+                  size="large"
+                  text="signin_with"
+                  shape="rectangular"
+                />
+                
+                {loading && (
+                  <p className="text-sm text-gray-600">Signing in...</p>
+                )}
               </div>
             </div>
-          </form>
+          </div>
 
           <div className="text-center">
             <button

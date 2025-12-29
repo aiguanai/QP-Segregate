@@ -37,6 +37,14 @@ def init_database():
         else:
             print("⚠️  Sample branches already exist")
         
+        # Get or create first branch for student user
+        first_branch = session.query(Branch).first()
+        if not first_branch:
+            first_branch = Branch(branch_name="Computer Science", branch_code="CS")
+            session.add(first_branch)
+            session.commit()
+            session.refresh(first_branch)
+        
         # Check if admin exists
         admin = session.query(User).filter(User.username == "admin").first()
         if admin:
@@ -61,6 +69,32 @@ def init_database():
             session.add(admin_user)
             session.commit()
             print("✅ Admin user created (username: admin, password: admin123)")
+        
+        # Check if student exists
+        student = session.query(User).filter(User.username == "student").first()
+        if student:
+            print("⚠️  Student user already exists")
+        else:
+            # Create student user
+            try:
+                pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+                password_hash = pwd_context.hash("student123")
+            except Exception as e:
+                print(f"⚠️  Bcrypt failed ({e}), using pbkdf2_sha256 instead")
+                pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
+                password_hash = pwd_context.hash("student123")
+            
+            student_user = User(
+                username="student",
+                email="student@rvce.edu.in",
+                password_hash=password_hash,
+                role="STUDENT",
+                branch_id=first_branch.branch_id,
+                academic_year=3
+            )
+            session.add(student_user)
+            session.commit()
+            print("✅ Student user created (username: student, password: student123)")
         
         # Create sample courses
         courses = [

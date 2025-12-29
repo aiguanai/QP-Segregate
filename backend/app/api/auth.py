@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from typing import Optional
 import sys
 import logging
+import requests
 
 # Set up logging
 logging.basicConfig(level=logging.DEBUG, stream=sys.stderr)
@@ -46,6 +47,8 @@ class UserResponse(BaseModel):
     role: str
     branch_id: Optional[int] = None
     academic_year: Optional[int] = None
+    profile_picture_url: Optional[str] = None
+    display_name: Optional[str] = None
     
     class Config:
         from_attributes = True
@@ -74,24 +77,63 @@ def get_user(db: Session, username: str):
         sys.stderr.flush()
         raise
 
-def authenticate_user(db: Session, username: str, password: str):
+def get_user_by_email(db: Session, email: str):
+    """Get user by email - for student email-based login"""
+    try:
+        return db.query(User).filter(User.email == email).first()
+    except Exception as e:
+        sys.stderr.write(f"❌ Error in get_user_by_email: {e}\n")
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        sys.stderr.flush()
+        raise
+
+def authenticate_user(db: Session, username: str, password: str, use_email: bool = False):
+    """Authenticate user by username or email
+    
+    Args:
+        db: Database session
+        username: Username or email
+        password: Password
+        use_email: If True, treat username as email (for student login)
+    """
     import sys
     try:
-        user = get_user(db, username)
+        if use_email:
+            # For students, login with email
+            user = get_user_by_email(db, username)  # username is actually email here
+            identifier = f"email '{username}'"
+        else:
+            # For admin, login with username
+            user = get_user(db, username)
+            identifier = f"username '{username}'"
+        
         if not user:
-            print(f"❌ User '{username}' not found", file=sys.stderr)
+            print(f"❌ User with {identifier} not found", file=sys.stderr)
             return False
         if not user.is_active:
-            print(f"❌ User '{username}' is not active", file=sys.stderr)
+            print(f"❌ User with {identifier} is not active", file=sys.stderr)
             return False
-        print(f"🔍 Verifying password for user '{username}'...", file=sys.stderr)
+        
+        # For students, validate email domain
+        if use_email and user.role == "STUDENT":
+            if not user.email.endswith("@rvce.edu.in"):
+                print(f"❌ Student email must be from @rvce.edu.in domain", file=sys.stderr)
+                return False
+        
+        # Check if user has a password (OAuth users may not have passwords)
+        if not user.password_hash:
+            print(f"❌ User with {identifier} has no password (OAuth-only account)", file=sys.stderr)
+            return False
+        
+        print(f"🔍 Verifying password for {identifier}...", file=sys.stderr)
         print(f"   Password hash: {user.password_hash[:50]}...", file=sys.stderr)
         verified = verify_password(password, user.password_hash)
         print(f"   Password verified: {verified}", file=sys.stderr)
         if not verified:
-            print(f"❌ Password verification failed for user '{username}'", file=sys.stderr)
+            print(f"❌ Password verification failed for {identifier}", file=sys.stderr)
             return False
-        print(f"✅ Authentication successful for user '{username}'", file=sys.stderr)
+        print(f"✅ Authentication successful for {identifier}", file=sys.stderr)
         return user
     except Exception as e:
         print(f"❌ Authentication error: {e}", file=sys.stderr)
@@ -187,15 +229,31 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = 
     sys.stderr.write("=" * 60 + "\n")
     sys.stderr.flush()
     try:
-        logger.error(f"🔐 Login attempt - Username: '{form_data.username}', Password length: {len(form_data.password) if form_data.password else 0}")
-        sys.stderr.write(f"🔐 Login attempt - Username: '{form_data.username}', Password length: {len(form_data.password) if form_data.password else 0}\n")
+        # Check if input is an email (contains @) - for student email-based login
+        is_email = "@" in form_data.username
+        use_email = is_email
+        
+        # If it's an email, validate it's from @rvce.edu.in domain
+        if is_email:
+            if not form_data.username.endswith("@rvce.edu.in"):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Student email must be from @rvce.edu.in domain"
+                )
+        
+        identifier = "Email" if is_email else "Username"
+        logger.error(f"🔐 Login attempt - {identifier}: '{form_data.username}', Password length: {len(form_data.password) if form_data.password else 0}")
+        sys.stderr.write(f"🔐 Login attempt - {identifier}: '{form_data.username}', Password length: {len(form_data.password) if form_data.password else 0}\n")
         sys.stderr.flush()
-        user = authenticate_user(db, form_data.username, form_data.password)
+        
+        user = authenticate_user(db, form_data.username, form_data.password, use_email=use_email)
         if not user:
-            print(f"❌ Authentication failed for username: '{form_data.username}'", file=sys.stderr)
+            print(f"❌ Authentication failed for {identifier.lower()}: '{form_data.username}'", file=sys.stderr)
+            # Different error messages for admin (username) vs student (email) login
+            error_message = "Incorrect email or password" if is_email else "Incorrect username or password"
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Incorrect username or password",
+                detail=error_message,
                 headers={"WWW-Authenticate": "Bearer"},
             )
         access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
@@ -232,6 +290,113 @@ async def read_users_me(current_user: User = Depends(get_current_user)):
 @router.post("/logout")
 async def logout():
     return {"message": "Successfully logged out"}
+
+class GoogleTokenRequest(BaseModel):
+    token: str
+
+@router.post("/google-login", response_model=Token)
+async def google_login(
+    request: GoogleTokenRequest,
+    db: Session = Depends(get_db)
+):
+    """Google OAuth login for students - validates Google token and checks @rvce.edu.in domain"""
+    try:
+        # Verify Google token
+        google_response = requests.get(
+            f"https://www.googleapis.com/oauth2/v3/tokeninfo?id_token={request.token}"
+        )
+        
+        if google_response.status_code != 200:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid Google token"
+            )
+        
+        google_data = google_response.json()
+        email = google_data.get("email")
+        name = google_data.get("name", "")  # Full name
+        picture = google_data.get("picture", "")  # Profile picture URL
+        given_name = google_data.get("given_name", "")  # First name
+        family_name = google_data.get("family_name", "")  # Last name
+        
+        if not email:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Email not found in Google token"
+            )
+        
+        # Validate email domain - must be @rvce.edu.in
+        if not email.endswith("@rvce.edu.in"):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access restricted to @rvce.edu.in email addresses only"
+            )
+        
+        # Extract display name - prefer full name, fallback to given name, then email username
+        display_name = name or given_name or email.split("@")[0]
+        
+        # Check if user exists, create if not
+        user = get_user_by_email(db, email)
+        
+        if not user:
+            # Create new student user from Google profile
+            # Generate username from email (before @)
+            username = email.split("@")[0]
+            # Ensure username is unique
+            base_username = username
+            counter = 1
+            while get_user(db, username):
+                username = f"{base_username}{counter}"
+                counter += 1
+            
+            # Create user without password (OAuth only)
+            user = User(
+                username=username,
+                email=email,
+                password_hash=None,  # No password for OAuth users
+                profile_picture_url=picture,
+                display_name=display_name,
+                role="STUDENT",
+                is_active=True
+            )
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+            sys.stderr.write(f"✅ Created new student user: {email} ({display_name})\n")
+        else:
+            # Update existing user if needed
+            if user.role != "STUDENT":
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="This email is registered as a non-student account"
+                )
+            # Update profile picture and display name if they've changed
+            if picture and user.profile_picture_url != picture:
+                user.profile_picture_url = picture
+            if display_name and user.display_name != display_name:
+                user.display_name = display_name
+            db.commit()
+            db.refresh(user)
+            sys.stderr.write(f"✅ Existing student user logged in: {email} ({display_name})\n")
+        
+        # Generate JWT token
+        access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+        access_token = create_access_token(
+            data={"sub": user.username}, expires_delta=access_token_expires
+        )
+        
+        return {"access_token": access_token, "token_type": "bearer"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        sys.stderr.write(f"❌ Google login error: {e}\n")
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Google login failed: {str(e)}"
+        )
 
 @router.get("/test-auth")
 async def test_auth(db: Session = Depends(get_db)):

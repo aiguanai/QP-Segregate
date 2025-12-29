@@ -10,11 +10,14 @@ interface User {
   role: string
   branch_id?: number
   academic_year?: number
+  profile_picture_url?: string
+  display_name?: string
 }
 
 interface AuthContextType {
   user: User | null
   login: (username: string, password: string, role?: string) => Promise<void>
+  googleLogin: (googleToken: string) => Promise<void>
   logout: () => void
   loading: boolean
 }
@@ -22,7 +25,20 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<User | null>(null)
+  const [user, setUser] = useState<User | null>(() => {
+    // Initialize user from localStorage if available (for faster page loads)
+    if (typeof window !== 'undefined') {
+      const storedUser = localStorage.getItem('user')
+      if (storedUser) {
+        try {
+          return JSON.parse(storedUser)
+        } catch (e) {
+          localStorage.removeItem('user')
+        }
+      }
+    }
+    return null
+  })
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -32,6 +48,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // Verify token and get user info
       verifyToken()
     } else {
+      // No token - clear any stale user data
+      localStorage.removeItem('user')
+      setUser(null)
       setLoading(false)
     }
   }, [])
@@ -39,10 +58,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const verifyToken = async () => {
     try {
       const response = await api.get('/api/auth/me')
-      setUser(response.data)
-    } catch (error) {
-      localStorage.removeItem('token')
-      setUser(null)
+      const userData = response.data
+      setUser(userData)
+      // Store user data in localStorage for faster reloads
+      localStorage.setItem('user', JSON.stringify(userData))
+    } catch (error: any) {
+      // Only remove token if it's actually invalid (401 Unauthorized)
+      // Don't remove on network errors, timeouts, or server errors
+      if (error.response?.status === 401) {
+        // Token is invalid or expired - remove everything
+        localStorage.removeItem('token')
+        localStorage.removeItem('user')
+        setUser(null)
+      } else if (error.code === 'ERR_NETWORK' || error.message?.includes('Network Error')) {
+        // Network error - keep token and user data from localStorage
+        // User state is already set from localStorage in useState initializer
+        console.warn('Network error during token verification. Using cached user data.')
+      } else {
+        // Other errors (500, etc.) - keep token and user data
+        console.error('Token verification error (non-401):', error)
+        // User state remains from localStorage
+      }
     } finally {
       setLoading(false)
     }
@@ -67,7 +103,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       // Get user info
       const userResponse = await api.get('/api/auth/me')
-      setUser(userResponse.data)
+      const userData = userResponse.data
+      setUser(userData)
+      // Store user data in localStorage
+      localStorage.setItem('user', JSON.stringify(userData))
       toast.success('Login successful!')
     } catch (error: any) {
       const message = error.response?.data?.detail || 'Login failed'
@@ -77,14 +116,40 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }
 
+  const googleLogin = async (googleToken: string) => {
+    setLoading(true)
+    try {
+      const response = await api.post('/api/auth/google-login', {
+        token: googleToken
+      })
+
+      const { access_token } = response.data
+      localStorage.setItem('token', access_token)
+
+      // Get user info
+      const userResponse = await api.get('/api/auth/me')
+      const userData = userResponse.data
+      setUser(userData)
+      // Store user data in localStorage
+      localStorage.setItem('user', JSON.stringify(userData))
+      toast.success('Login successful!')
+    } catch (error: any) {
+      const message = error.response?.data?.detail || 'Google login failed'
+      throw new Error(message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
   const logout = () => {
     localStorage.removeItem('token')
+    localStorage.removeItem('user')
     setUser(null)
     toast.success('Logged out successfully')
   }
 
   return (
-    <AuthContext.Provider value={{ user, login, logout, loading }}>
+    <AuthContext.Provider value={{ user, login, googleLogin, logout, loading }}>
       {children}
     </AuthContext.Provider>
   )

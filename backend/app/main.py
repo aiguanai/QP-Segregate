@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
 import os
 import traceback
 
@@ -68,6 +69,35 @@ async def root():
 @app.get("/health")
 async def health_check():
     return {"status": "healthy", "version": "1.0.0"}
+
+# Handle FastAPI validation errors (form data, etc.)
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    import sys
+    sys.stderr.write(f"❌ Validation error: {exc}\n")
+    sys.stderr.write(f"   Errors: {exc.errors()}\n")
+    sys.stderr.flush()
+    
+    # Format validation errors into a readable message
+    errors = exc.errors()
+    error_messages = []
+    for error in errors:
+        loc = " -> ".join(str(x) for x in error.get("loc", []))
+        msg = error.get("msg", "Validation error")
+        error_messages.append(f"{loc}: {msg}")
+    
+    error_detail = "; ".join(error_messages) if error_messages else "Invalid request data"
+    
+    return JSONResponse(
+        status_code=400,
+        content={"detail": error_detail},
+        headers={
+            "Access-Control-Allow-Origin": "http://localhost:3000",
+            "Access-Control-Allow-Credentials": "true",
+            "Access-Control-Allow-Methods": "*",
+            "Access-Control-Allow-Headers": "*",
+        }
+    )
 
 # Global exception handler to ensure CORS headers are always sent
 @app.exception_handler(Exception)

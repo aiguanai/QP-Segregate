@@ -102,13 +102,28 @@ def convert_docx_to_pdf(docx_path: str) -> str:
         return docx_path
 
 def get_page_count(file_path: str, file_type: str) -> int:
-    """Get page count for PDF or DOCX file"""
+    """Get page count for PDF or DOCX file. Returns 1 if unable to determine."""
     if file_type == 'pdf':
         try:
             from pdf2image import convert_from_path
-            return len(convert_from_path(file_path))
+            images = convert_from_path(file_path)
+            return len(images)
+        except ImportError:
+            # pdf2image not installed - use fallback
+            import sys
+            sys.stderr.write("⚠️  pdf2image not available, using fallback page count\n")
+            return 1
         except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Error reading PDF: {str(e)}")
+            # Poppler not installed or other error - use fallback
+            import sys
+            error_msg = str(e)
+            if "poppler" in error_msg.lower() or "path" in error_msg.lower():
+                sys.stderr.write(f"⚠️  Poppler not installed: {error_msg}. Using fallback page count.\n")
+                sys.stderr.write("   Note: Install poppler for accurate page counts. For now, using default of 1 page.\n")
+            else:
+                sys.stderr.write(f"⚠️  Error reading PDF: {error_msg}. Using fallback page count.\n")
+            sys.stderr.flush()
+            return 1  # Return 1 as fallback instead of raising error
     elif file_type == 'docx':
         try:
             from docx import Document
@@ -117,8 +132,17 @@ def get_page_count(file_path: str, file_type: str) -> int:
             para_count = len([p for p in doc.paragraphs if p.text.strip()])
             # Rough estimate: ~30 paragraphs per page
             return max(1, para_count // 30 + 1)
+        except ImportError:
+            # python-docx not installed - use fallback
+            import sys
+            sys.stderr.write("⚠️  python-docx not available, using fallback page count\n")
+            return 1
         except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Error reading DOCX: {str(e)}")
+            # Error reading DOCX - use fallback
+            import sys
+            sys.stderr.write(f"⚠️  Error reading DOCX: {str(e)}. Using fallback page count.\n")
+            sys.stderr.flush()
+            return 1  # Return 1 as fallback instead of raising error
     else:
         return 1
 
@@ -129,8 +153,25 @@ async def upload_file(
     current_user: User = Depends(get_current_user)
 ):
     """Step 1: Upload PDF or DOCX file and return upload details"""
+    import sys
+    sys.stderr.write(f"📤 Upload request received\n")
+    sys.stderr.write(f"   File: {file.filename}\n")
+    sys.stderr.write(f"   File type (document): {file_type}\n")
+    sys.stderr.write(f"   File type (received): {type(file_type)}, value: '{file_type}'\n")
+    sys.stderr.flush()
+    
     if current_user.role != "ADMIN":
         raise HTTPException(status_code=403, detail="Admin access required")
+    
+    # Validate file_type parameter
+    if file_type not in ['question_paper', 'syllabus']:
+        error_msg = f"Invalid file_type: '{file_type}'. Must be 'question_paper' or 'syllabus'"
+        sys.stderr.write(f"❌ {error_msg}\n")
+        sys.stderr.flush()
+        raise HTTPException(
+            status_code=400, 
+            detail=error_msg
+        )
     
     filename_lower = file.filename.lower() if file.filename else ""
     if not (filename_lower.endswith('.pdf') or filename_lower.endswith('.docx') or filename_lower.endswith('.doc')):
@@ -159,8 +200,17 @@ async def upload_file(
     # Get page count
     try:
         page_count = get_page_count(temp_path, detected_file_type)
+    except HTTPException:
+        # Re-raise HTTPExceptions from get_page_count (they already have proper error messages)
+        raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        error_msg = str(e) if str(e) else f"Error processing {detected_file_type.upper()} file"
+        sys.stderr.write(f"❌ Error getting page count: {error_msg}\n")
+        sys.stderr.write(f"   Exception type: {type(e).__name__}\n")
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        sys.stderr.flush()
+        raise HTTPException(status_code=400, detail=error_msg)
     
     return FileUploadResponse(
         upload_id=upload_id,

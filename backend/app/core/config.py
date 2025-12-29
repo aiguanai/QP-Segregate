@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     AWS_S3_BUCKET: Optional[str] = None
     MATHPIX_API_KEY: Optional[str] = None
     
+    # Google OAuth
+    GOOGLE_CLIENT_ID: Optional[str] = None
+    GOOGLE_CLIENT_SECRET: Optional[str] = None
+    
     # File Storage
     UPLOAD_DIR: str = "storage/papers"
     TEMP_UPLOAD_DIR: str = "tmp/uploads"

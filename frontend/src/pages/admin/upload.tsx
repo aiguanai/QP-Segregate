@@ -4,6 +4,7 @@ import { useRouter } from 'next/router'
 import { useDropzone } from 'react-dropzone'
 import { useAuth } from '../../hooks/useAuth'
 import { api } from '../../utils/api'
+import ThemeToggle from '../../components/ThemeToggle'
 import { 
   DocumentTextIcon, 
   CloudArrowUpIcon,
@@ -54,6 +55,12 @@ export default function AdminUpload() {
       formData.append('file', file)
       formData.append('file_type', fileType)
 
+      console.log('Uploading file:', {
+        filename: file.name,
+        fileType: fileType,
+        fileSize: file.size
+      })
+
       // For FormData, axios should set Content-Type automatically (including boundary)
       // Don't manually set Content-Type, let the browser set it with the boundary
       const response = await api.post('/api/admin/upload-file', formData)
@@ -65,9 +72,77 @@ export default function AdminUpload() {
         pageCount: result.page_count,
         fileSize: result.file_size
       })
-      toast.success(`${result.file_type.toUpperCase()} uploaded successfully!`)
+      toast.success(`${fileType === 'syllabus' ? 'Syllabus' : 'Question Paper'} uploaded successfully!`)
     } catch (error: any) {
-      toast.error(error.message || 'Upload failed. Please try again.')
+      console.error('Upload error details:', {
+        error,
+        response: error.response,
+        data: error.response?.data,
+        status: error.response?.status,
+        statusText: error.response?.statusText,
+        request: error.request
+      })
+      
+      // Handle different error response formats
+      let errorMessage = 'Upload failed. Please try again.'
+      
+      try {
+        if (error.response?.data) {
+          const data = error.response.data
+          
+          // FastAPI typically returns {detail: "message"} or {detail: [...]}
+          if (data.detail !== undefined && data.detail !== null) {
+            if (typeof data.detail === 'string') {
+              // Handle empty string case
+              if (data.detail.trim() !== '') {
+                errorMessage = data.detail
+              } else {
+                // If detail is empty, try to get more info
+                errorMessage = `Validation error (status ${error.response.status}). Please check the file format and try again.`
+              }
+            } else if (Array.isArray(data.detail)) {
+              const messages = data.detail.map((err: any) => 
+                typeof err === 'string' ? err : (err.msg || err.loc?.join('.') || JSON.stringify(err))
+              ).filter((msg: string) => msg && msg.trim() !== '')
+              errorMessage = messages.length > 0 ? messages.join(', ') : 'Validation error occurred'
+            } else {
+              errorMessage = String(data.detail) || 'Validation error occurred'
+            }
+          } else if (data.message) {
+            errorMessage = String(data.message)
+          } else if (typeof data === 'string') {
+            errorMessage = data
+          } else {
+            // Try to extract any meaningful error message
+            const errorStr = JSON.stringify(data)
+            if (errorStr && errorStr !== '{}' && errorStr !== '{"detail":""}') {
+              errorMessage = `Error: ${errorStr}`
+            }
+          }
+        } else if (error.message) {
+          errorMessage = String(error.message)
+        } else if (error.response?.status) {
+          errorMessage = `Request failed with status ${error.response.status}. Please check the backend logs for details.`
+        } else if (error.request) {
+          errorMessage = 'Network error: Could not reach server. Please check your connection.'
+        }
+      } catch (parseError) {
+        console.error('Error parsing error message:', parseError)
+        errorMessage = `Upload failed: ${String(error)}`
+      }
+      
+      // Ensure we always have a non-empty message
+      if (!errorMessage || errorMessage.trim() === '') {
+        errorMessage = `Upload failed with status ${error.response?.status || 'unknown'}. Please check the backend terminal for error details.`
+      }
+      
+      console.log('Displaying error message:', errorMessage)
+      toast.error(errorMessage, {
+        duration: 5000,
+        style: {
+          maxWidth: '500px',
+        },
+      })
     } finally {
       setUploading(false)
     }
@@ -164,20 +239,21 @@ export default function AdminUpload() {
         <title>Upload Question Paper - QPaper AI</title>
       </Head>
 
-      <div className="min-h-screen bg-gray-50">
+      <div className="min-h-screen bg-gray-50 dark:bg-gray-900 transition-colors">
         {/* Header */}
-        <header className="bg-white shadow-sm">
+        <header className="bg-white dark:bg-gray-800 shadow-sm border-b border-gray-200 dark:border-gray-700 transition-colors">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div className="flex justify-between items-center py-4">
               <div className="flex items-center">
                 <button
                   onClick={() => router.push('/admin/dashboard')}
-                  className="text-primary-600 hover:text-primary-500 mr-4"
+                  className="text-primary-600 dark:text-primary-400 hover:text-primary-500 dark:hover:text-primary-300 mr-4 transition-colors"
                 >
                   ← Back to Dashboard
                 </button>
-                <h1 className="text-2xl font-bold text-gray-900">Upload Question Paper</h1>
+                <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Upload Question Paper</h1>
               </div>
+              <ThemeToggle />
             </div>
           </div>
         </header>
@@ -185,12 +261,12 @@ export default function AdminUpload() {
         <main className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
           {/* Step 1: File Upload */}
           {uploadState.step === 'upload' && (
-            <div className="card">
-              <h2 className="text-lg font-semibold text-gray-900 mb-4">Step 1: Upload File</h2>
+            <div className="card dark:bg-gray-800 dark:border-gray-700">
+              <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Step 1: Upload File</h2>
               
               {/* File Type Selector */}
               <div className="mb-6">
-                <label className="block text-sm font-medium text-gray-700 mb-2">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                   File Type
                 </label>
                 <div className="flex space-x-4">
@@ -201,9 +277,9 @@ export default function AdminUpload() {
                       value="question_paper"
                       checked={fileType === 'question_paper'}
                       onChange={(e) => setFileType(e.target.value as 'question_paper' | 'syllabus')}
-                      className="mr-2"
+                      className="mr-2 text-primary-600 dark:text-primary-400"
                     />
-                    <span>Question Paper</span>
+                    <span className="text-gray-900 dark:text-white">Question Paper</span>
                   </label>
                   <label className="flex items-center">
                     <input
@@ -212,9 +288,9 @@ export default function AdminUpload() {
                       value="syllabus"
                       checked={fileType === 'syllabus'}
                       onChange={(e) => setFileType(e.target.value as 'question_paper' | 'syllabus')}
-                      className="mr-2"
+                      className="mr-2 text-primary-600 dark:text-primary-400"
                     />
-                    <span>Syllabus</span>
+                    <span className="text-gray-900 dark:text-white">Syllabus</span>
                   </label>
                 </div>
               </div>
@@ -223,22 +299,22 @@ export default function AdminUpload() {
                 {...getRootProps()}
                 className={`border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors duration-200 ${
                   isDragActive
-                    ? 'border-primary-500 bg-primary-50'
-                    : 'border-gray-300 hover:border-primary-400'
+                    ? 'border-primary-500 dark:border-primary-400 bg-primary-50 dark:bg-primary-900/20'
+                    : 'border-gray-300 dark:border-gray-600 hover:border-primary-400 dark:hover:border-primary-500'
                 } ${uploading ? 'opacity-50 cursor-not-allowed' : ''}`}
               >
                 <input {...getInputProps()} />
-                <CloudArrowUpIcon className="h-12 w-12 text-gray-400 mx-auto mb-4" />
+                <CloudArrowUpIcon className="h-12 w-12 text-gray-400 dark:text-gray-500 mx-auto mb-4" />
                 {uploading ? (
-                  <p className="text-gray-600">Uploading...</p>
+                  <p className="text-gray-600 dark:text-gray-300">Uploading...</p>
                 ) : isDragActive ? (
-                  <p className="text-primary-600">Drop the PDF here...</p>
+                  <p className="text-primary-600 dark:text-primary-400">Drop the PDF here...</p>
                 ) : (
                   <div>
-                    <p className="text-gray-600 mb-2">
+                    <p className="text-gray-600 dark:text-gray-300 mb-2">
                       Drag & drop a PDF or DOCX file here, or click to browse
                     </p>
-                    <p className="text-sm text-gray-500">
+                    <p className="text-sm text-gray-500 dark:text-gray-400">
                       Supported formats: PDF, DOCX (OCR will be applied for image-based PDFs)
                     </p>
                   </div>
@@ -249,18 +325,18 @@ export default function AdminUpload() {
 
           {/* Step 2: Metadata Form */}
           {uploadState.step === 'metadata' && (
-            <div className="card">
+            <div className="card dark:bg-gray-800 dark:border-gray-700">
               <div className="flex items-center mb-6">
-                <CheckCircleIcon className="h-6 w-6 text-green-600 mr-2" />
-                <h2 className="text-lg font-semibold text-gray-900">Step 2: Paper Details</h2>
+                <CheckCircleIcon className="h-6 w-6 text-green-600 dark:text-green-500 mr-2" />
+                <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Step 2: Paper Details</h2>
               </div>
 
-              <div className="mb-4 p-4 bg-green-50 border border-green-200 rounded-lg">
+              <div className="mb-4 p-4 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg">
                 <div className="flex items-center">
-                  <DocumentTextIcon className="h-5 w-5 text-green-600 mr-2" />
+                  <DocumentTextIcon className="h-5 w-5 text-green-600 dark:text-green-500 mr-2" />
                   <div>
-                    <p className="text-sm font-medium text-green-800">File uploaded successfully</p>
-                    <p className="text-xs text-green-600">
+                    <p className="text-sm font-medium text-green-800 dark:text-green-300">File uploaded successfully</p>
+                    <p className="text-xs text-green-600 dark:text-green-400">
                       {uploadState.pageCount} pages • {(uploadState.fileSize! / 1024 / 1024).toFixed(1)} MB
                     </p>
                   </div>
@@ -270,14 +346,14 @@ export default function AdminUpload() {
               <form onSubmit={handleMetadataSubmit} className="space-y-6">
                 <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
                   <div>
-                    <label htmlFor="course_code" className="block text-sm font-medium text-gray-700">
+                    <label htmlFor="course_code" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
                       Course Code *
                     </label>
                     <select
                       id="course_code"
                       name="course_code"
                       required
-                      className="input-field mt-1"
+                      className="input-field mt-1 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
                       value={metadata.course_code}
                       onChange={handleChange}
                     >
@@ -291,14 +367,14 @@ export default function AdminUpload() {
                   </div>
 
                   <div>
-                    <label htmlFor="academic_year" className="block text-sm font-medium text-gray-700">
+                    <label htmlFor="academic_year" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
                       Academic Year *
                     </label>
                     <select
                       id="academic_year"
                       name="academic_year"
                       required
-                      className="input-field mt-1"
+                      className="input-field mt-1 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
                       value={metadata.academic_year}
                       onChange={handleChange}
                     >
@@ -311,14 +387,14 @@ export default function AdminUpload() {
                   </div>
 
                   <div>
-                    <label htmlFor="semester_type" className="block text-sm font-medium text-gray-700">
+                    <label htmlFor="semester_type" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
                       Semester *
                     </label>
                     <select
                       id="semester_type"
                       name="semester_type"
                       required
-                      className="input-field mt-1"
+                      className="input-field mt-1 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
                       value={metadata.semester_type}
                       onChange={handleChange}
                     >
@@ -330,14 +406,14 @@ export default function AdminUpload() {
 
                   {fileType === 'question_paper' && (
                     <div>
-                      <label htmlFor="exam_type" className="block text-sm font-medium text-gray-700">
+                      <label htmlFor="exam_type" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
                         Exam Type *
                       </label>
                       <select
                         id="exam_type"
                         name="exam_type"
                         required
-                        className="input-field mt-1"
+                        className="input-field mt-1 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
                         value={metadata.exam_type}
                         onChange={handleChange}
                       >
@@ -351,14 +427,14 @@ export default function AdminUpload() {
                   )}
 
                   <div className="sm:col-span-2">
-                    <label htmlFor="exam_date" className="block text-sm font-medium text-gray-700">
+                    <label htmlFor="exam_date" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
                       Exam Date (Optional)
                     </label>
                     <input
                       type="date"
                       id="exam_date"
                       name="exam_date"
-                      className="input-field mt-1"
+                      className="input-field mt-1 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
                       value={metadata.exam_date}
                       onChange={handleChange}
                     />
@@ -387,42 +463,42 @@ export default function AdminUpload() {
 
           {/* Step 3: Processing Status */}
           {uploadState.step === 'processing' && (
-            <div className="card">
+            <div className="card dark:bg-gray-800 dark:border-gray-700">
               <div className="flex items-center mb-6">
-                <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary-600 mr-2"></div>
-                <h2 className="text-lg font-semibold text-gray-900">Processing Question Paper</h2>
+                <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary-600 dark:border-primary-400 mr-2"></div>
+                <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Processing Question Paper</h2>
               </div>
 
               <div className="space-y-4">
                 <div className="flex items-center">
-                  <CheckCircleIcon className="h-5 w-5 text-green-600 mr-3" />
-                  <span className="text-sm text-gray-600">PDF Uploaded</span>
+                  <CheckCircleIcon className="h-5 w-5 text-green-600 dark:text-green-500 mr-3" />
+                  <span className="text-sm text-gray-600 dark:text-gray-300">PDF Uploaded</span>
                 </div>
 
                 <div className="flex items-center">
-                  <CheckCircleIcon className="h-5 w-5 text-green-600 mr-3" />
-                  <span className="text-sm text-gray-600">OCR Extraction</span>
+                  <CheckCircleIcon className="h-5 w-5 text-green-600 dark:text-green-500 mr-3" />
+                  <span className="text-sm text-gray-600 dark:text-gray-300">OCR Extraction</span>
                 </div>
 
                 <div className="flex items-center">
-                  <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-primary-600 mr-3"></div>
-                  <span className="text-sm text-gray-600">Classifying Questions...</span>
+                  <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-primary-600 dark:border-primary-400 mr-3"></div>
+                  <span className="text-sm text-gray-600 dark:text-gray-300">Classifying Questions...</span>
                 </div>
 
                 <div className="flex items-center">
-                  <div className="h-5 w-5 border-2 border-gray-300 rounded mr-3"></div>
-                  <span className="text-sm text-gray-600">Duplicate Detection Pending</span>
+                  <div className="h-5 w-5 border-2 border-gray-300 dark:border-gray-600 rounded mr-3"></div>
+                  <span className="text-sm text-gray-600 dark:text-gray-300">Duplicate Detection Pending</span>
                 </div>
 
                 {uploadState.progress !== undefined && (
                   <div className="mt-4">
-                    <div className="flex justify-between text-sm text-gray-600 mb-2">
+                    <div className="flex justify-between text-sm text-gray-600 dark:text-gray-300 mb-2">
                       <span>Progress</span>
                       <span>{Math.round(uploadState.progress)}%</span>
                     </div>
-                    <div className="w-full bg-gray-200 rounded-full h-2">
+                    <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
                       <div
-                        className="bg-primary-600 h-2 rounded-full transition-all duration-300"
+                        className="bg-primary-600 dark:bg-primary-500 h-2 rounded-full transition-all duration-300"
                         style={{ width: `${uploadState.progress}%` }}
                       ></div>
                     </div>
@@ -434,11 +510,11 @@ export default function AdminUpload() {
 
           {/* Step 4: Completed */}
           {uploadState.step === 'completed' && (
-            <div className="card">
+            <div className="card dark:bg-gray-800 dark:border-gray-700">
               <div className="text-center">
-                <CheckCircleIcon className="h-16 w-16 text-green-600 mx-auto mb-4" />
-                <h2 className="text-2xl font-bold text-gray-900 mb-2">Processing Completed!</h2>
-                <p className="text-gray-600 mb-6">
+                <CheckCircleIcon className="h-16 w-16 text-green-600 dark:text-green-500 mx-auto mb-4" />
+                <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">Processing Completed!</h2>
+                <p className="text-gray-600 dark:text-gray-300 mb-6">
                   Your question paper has been successfully processed and added to the database.
                 </p>
                 <div className="flex justify-center space-x-4">
