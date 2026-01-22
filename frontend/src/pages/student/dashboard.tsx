@@ -3,6 +3,7 @@ import Head from 'next/head'
 import { useAuth } from '../../hooks/useAuth'
 import { useRouter } from 'next/router'
 import ThemeToggle from '../../components/ThemeToggle'
+import { api } from '../../utils/api'
 import { 
   MagnifyingGlassIcon, 
   BookmarkIcon, 
@@ -34,17 +35,38 @@ export default function StudentDashboard() {
     fetchMyCourses()
   }, [user, router])
 
+  // Refresh courses when returning from courses page or when page becomes visible
+  useEffect(() => {
+    const handleFocus = () => {
+      if (user) {
+        fetchMyCourses()
+      }
+    }
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && user) {
+        fetchMyCourses()
+      }
+    }
+    window.addEventListener('focus', handleFocus)
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => {
+      window.removeEventListener('focus', handleFocus)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+    }
+  }, [user])
+
   const fetchMyCourses = async () => {
     try {
-      const response = await fetch('/api/student/my-courses', {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        }
-      })
-      const data = await response.json()
-      setCourses(data)
-    } catch (error) {
+      // Use the api utility to ensure correct backend URL
+      const response = await api.get('/api/student/my-courses')
+      console.log('Fetched courses:', response.data)
+      setCourses(Array.isArray(response.data) ? response.data : [])
+    } catch (error: any) {
       console.error('Failed to fetch courses:', error)
+      if (error.response) {
+        console.error('Error response:', error.response.status, error.response.data)
+      }
+      setCourses([])
     } finally {
       setLoading(false)
     }
@@ -206,8 +228,19 @@ export default function StudentDashboard() {
 
           {/* My Courses */}
           <div className="mb-8">
-            <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">My Courses</h2>
-            {courses.length > 0 ? (
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold text-gray-900 dark:text-white">My Courses</h2>
+              <button
+                onClick={fetchMyCourses}
+                disabled={loading}
+                className="text-sm text-primary-600 dark:text-primary-400 hover:text-primary-500 dark:hover:text-primary-300 transition-colors disabled:opacity-50"
+              >
+                {loading ? 'Refreshing...' : 'Refresh'}
+              </button>
+            </div>
+            {loading ? (
+              <p className="text-gray-600 dark:text-gray-400">Loading courses...</p>
+            ) : courses.length > 0 ? (
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
                 {courses.map((course) => (
                   <div key={course.course_code} className="card">
@@ -232,7 +265,13 @@ export default function StudentDashboard() {
             ) : (
               <div className="card text-center py-8">
                 <AcademicCapIcon className="h-12 w-12 text-gray-400 dark:text-gray-500 mx-auto mb-4" />
-                <p className="text-gray-600 dark:text-gray-300">No courses found for your profile</p>
+                <p className="text-gray-600 dark:text-gray-300 mb-2">No courses selected</p>
+                <button
+                  onClick={() => router.push('/student/courses')}
+                  className="text-primary-600 dark:text-primary-400 hover:underline"
+                >
+                  Select your courses
+                </button>
               </div>
             )}
           </div>

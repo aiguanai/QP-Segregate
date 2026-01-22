@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_ID: Optional[str] = None
     GOOGLE_CLIENT_SECRET: Optional[str] = None
     
+    # OpenAI API
+    OPENAI_API_KEY: Optional[str] = None
+    OPENAI_MODEL: str = "gpt-4o"  # Default to gpt-4o, can use gpt-4-vision-preview for vision
+    
     # File Storage
     UPLOAD_DIR: str = "storage/papers"
     TEMP_UPLOAD_DIR: str = "tmp/uploads"

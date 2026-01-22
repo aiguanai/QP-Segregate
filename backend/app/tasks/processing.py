@@ -3,10 +3,13 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy import create_engine
 from app.core.config import settings
 from app.models.question_paper import QuestionPaper, ProcessingStatus
-from app.models.question import Question, ReviewQueue, BloomLevel, BloomCategory, DifficultyLevel
+from app.models.question import Question, ReviewQueue, BloomLevel, BloomCategory, DifficultyLevel, ReviewStatus
 from app.models.course import CourseUnit
 from app.services.ocr_service import OCRService
 from app.services.classification_service import ClassificationService
+from app.services.file_conversion_service import FileConversionService
+from app.services.llm_extraction_service import LLMExtractionService
+from app.services.llm_classification_service import LLMClassificationService
 from app.core.local_cloud_storage import local_cloud_storage
 from app.tasks.celery import celery
 import os
@@ -34,12 +37,31 @@ if settings.MONGODB_URL and settings.MONGODB_URL.strip():
 ocr_service = OCRService()
 classification_service = None  # Will be initialized on first use
 
+# Initialize LLM services
+file_conversion_service = FileConversionService()
+llm_extraction_service = None
+llm_classification_service = None
+
 def get_classification_service():
     """Lazy initialization of classification service"""
     global classification_service
     if classification_service is None:
         classification_service = ClassificationService()
     return classification_service
+
+def get_llm_extraction_service():
+    """Lazy initialization of LLM extraction service"""
+    global llm_extraction_service
+    if llm_extraction_service is None:
+        llm_extraction_service = LLMExtractionService()
+    return llm_extraction_service
+
+def get_llm_classification_service():
+    """Lazy initialization of LLM classification service"""
+    global llm_classification_service
+    if llm_classification_service is None:
+        llm_classification_service = LLMClassificationService()
+    return llm_classification_service
 
 @celery.task(bind=True)
 def process_question_paper(self, paper_id: int):
@@ -57,20 +79,22 @@ def process_question_paper(self, paper_id: int):
         paper.processing_progress = 0
         db.commit()
         
-        # Step 1: OCR Processing
-        self.update_state(state='PROGRESS', meta={'step': 'OCR', 'progress': 10})
-        ocr_results = process_ocr(paper)
+        # Step 1: File Conversion (PDF/DOCX to text/images)
+        self.update_state(state='PROGRESS', meta={'step': 'File Conversion', 'progress': 10})
+        file_content = convert_file_for_llm(paper)
         
-        # Step 2: Question Parsing
-        self.update_state(state='PROGRESS', meta={'step': 'Parsing', 'progress': 30})
-        questions = parse_questions(ocr_results)
+        # Step 2: LLM Question Extraction
+        self.update_state(state='PROGRESS', meta={'step': 'LLM Extraction', 'progress': 30})
+        questions = extract_questions_with_llm(file_content)
         
-        # Step 3: Classification
-        self.update_state(state='PROGRESS', meta={'step': 'Classification', 'progress': 50})
-        classified_questions = classify_questions(questions, paper.course_code)
+        # Step 3: LLM Classification (units and topic tags)
+        self.update_state(state='PROGRESS', meta={'step': 'LLM Classification', 'progress': 50})
+        classified_questions = classify_questions_with_llm(questions, paper.course_code, db)
         
-        # Step 4: Duplicate Detection
+        # Step 4: Duplicate Detection (simplified - paper-level duplicates already checked at upload)
         self.update_state(state='PROGRESS', meta={'step': 'Deduplication', 'progress': 70})
+        # Simple duplicate detection - just marks questions as canonical
+        # Paper-level duplicate checking (same course, exam type, date) is done in submit_metadata
         deduplicated_questions = detect_duplicates(classified_questions, paper.course_code)
         
         # Step 5: Save to Database
@@ -105,6 +129,34 @@ def process_question_paper(self, paper_id: int):
         raise e
     finally:
         db.close()
+
+def convert_file_for_llm(paper: QuestionPaper) -> Dict:
+    """Convert PDF/DOCX file to text and images for LLM processing"""
+    file_path = paper.pdf_path
+    if not file_path or not os.path.exists(file_path):
+        raise Exception(f"File not found: {file_path}")
+    
+    # Convert file using FileConversionService
+    conversion_result = file_conversion_service.convert_file(file_path)
+    
+    # Prepare for LLM API
+    llm_content = file_conversion_service.prepare_for_llm(conversion_result)
+    
+    return llm_content
+
+def extract_questions_with_llm(file_content: Dict) -> List[Dict]:
+    """Extract questions using LLM"""
+    extraction_service = get_llm_extraction_service()
+    questions = extraction_service.extract_questions_with_llm(file_content)
+    return questions
+
+def classify_questions_with_llm(questions: List[Dict], course_code: str, db) -> List[Dict]:
+    """Classify questions to units and generate topic tags using LLM"""
+    classification_service = get_llm_classification_service()
+    classified_questions = classification_service.classify_questions_with_llm(
+        questions, course_code, db
+    )
+    return classified_questions
 
 def process_ocr(paper: QuestionPaper) -> Dict:
     """Process PDF or DOCX with OCR using local cloud storage"""
@@ -197,121 +249,141 @@ def classify_questions(questions: List[Dict], course_code: str) -> List[Dict]:
     return classified_questions
 
 def detect_duplicates(questions: List[Dict], course_code: str) -> List[Dict]:
-    """Detect and group similar questions (same answer, different wording)"""
-    # Get existing canonical questions for the course
-    existing_embeddings = []
-    existing_question_ids = []
-    
-    # Query existing canonical questions for the course
-    db = SessionLocal()
-    existing_questions = db.query(Question).filter(
-        Question.course_code == course_code,
-        Question.is_canonical == True
-    ).all()
-    
-    # Generate embeddings for existing questions
-    cls_service = get_classification_service()
-    for eq in existing_questions:
-        try:
-            embedding = cls_service.generate_embedding(eq.question_text)
-            existing_embeddings.append(embedding)
-            existing_question_ids.append(eq.question_id)
-        except Exception as e:
-            # If embedding generation fails, skip this question
-            print(f"Failed to generate embedding for question {eq.question_id}: {e}")
-            continue
-    
-    deduplicated = []
-    
-    # Compare new questions with existing ones
+    """
+    Simple duplicate detection: Just mark all questions as canonical.
+    Paper-level duplicate checking (same course, exam type, date) is already done
+    at upload time in submit_metadata endpoint.
+    """
+    # Mark all questions as canonical (new questions)
+    # No need for complex embedding-based similarity checking
     for question in questions:
-        # Find similar questions using semantic similarity
-        similar_questions = cls_service.find_similar_questions(
-            question['question_text'], course_code, existing_embeddings
-        )
-        
-        if similar_questions:
-            # Group with existing canonical question (variant detected)
-            parent_id = existing_question_ids[similar_questions[0][0]]  # Most similar question ID
-            question['is_canonical'] = False
-            question['parent_question_id'] = parent_id
-            question['similarity_score'] = similar_questions[0][1]
-        else:
-            # New canonical question (no similar questions found)
-            question['is_canonical'] = True
-            question['parent_question_id'] = None
-            question['similarity_score'] = None
-        
-        deduplicated.append(question)
+        question['is_canonical'] = True
+        question['parent_question_id'] = None
+        question['similarity_score'] = None
     
-    db.close()
-    return deduplicated
+    return questions
 
 def save_questions(questions: List[Dict], paper: QuestionPaper, db):
     """Save questions to database"""
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    if not questions:
+        logger.warning(f"No questions to save for paper {paper.paper_id}")
+        return
+    
+    logger.info(f"Saving {len(questions)} questions for paper {paper.paper_id}")
     review_count = 0
+    saved_count = 0
     
-    for question_data in questions:
-        # Create question object
-        question = Question(
-            paper_id=paper.paper_id,
-            course_code=paper.course_code,
-            unit_id=question_data.get('unit_id'),
-            question_number=question_data['question_number'],
-            question_text=question_data['question_text'],
-            marks=question_data.get('marks'),
-            bloom_level=BloomLevel(question_data['bloom_level']) if question_data.get('bloom_level') else None,
-            bloom_category=BloomCategory(question_data['bloom_category']) if question_data.get('bloom_category') else None,
-            bloom_confidence=question_data.get('bloom_confidence'),
-            difficulty_level=DifficultyLevel(question_data['difficulty_level']),
-            classification_confidence=question_data.get('unit_confidence', 0),
-            is_canonical=question_data.get('is_canonical', True),
-            parent_question_id=question_data.get('parent_question_id'),
-            similarity_score=question_data.get('similarity_score'),
-            has_subparts=question_data.get('has_subparts', False),
-            has_mathematical_notation=question_data.get('has_mathematical_notation', False),
-            page_number=question_data.get('page_number')
-        )
-        
-        db.add(question)
-        db.flush()  # Get the question_id
-        
-        # Add to review queue if confidence is low
-        if (question_data.get('unit_confidence', 0) < 0.7 or 
-            question_data.get('bloom_confidence', 0) < 0.7):
+    try:
+        for idx, question_data in enumerate(questions):
+            # Parse topic tags (should be a list, store as JSON string)
+            topic_tags_json = None
+            if question_data.get('topic_tags'):
+                topic_tags_json = json.dumps(question_data['topic_tags'])
             
-            review_queue = ReviewQueue(
-                question_id=question.question_id,
-                issue_type='LOW_CONFIDENCE',
-                suggested_correction=json.dumps({
-                    'unit_id': question_data.get('unit_id'),
-                    'bloom_level': question_data.get('bloom_level'),
-                    'marks': question_data.get('marks')
-                }),
-                priority=2
-            )
-            
-            db.add(review_queue)
-            review_count += 1
+            try:
+                # Validate required fields
+                if 'question_number' not in question_data:
+                    logger.error(f"Question {idx} missing 'question_number': {question_data}")
+                    continue
+                if 'question_text' not in question_data:
+                    logger.error(f"Question {idx} missing 'question_text': {question_data}")
+                    continue
+                
+                # Create question object
+                question = Question(
+                    paper_id=paper.paper_id,
+                    course_code=paper.course_code,
+                    unit_id=question_data.get('unit_id'),
+                    question_number=str(question_data['question_number']),  # Ensure it's a string
+                    question_text=str(question_data['question_text']),  # Ensure it's a string
+                    marks=question_data.get('marks'),
+                    bloom_level=BloomLevel(question_data['bloom_taxonomy_level']) if question_data.get('bloom_taxonomy_level') else None,
+                    bloom_category=BloomCategory(question_data['bloom_category']) if question_data.get('bloom_category') else None,
+                    bloom_confidence=None,  # LLM doesn't provide confidence for Bloom
+                    difficulty_level=None,  # Can be added later if needed
+                    classification_confidence=question_data.get('classification_confidence', 0),
+                    is_canonical=question_data.get('is_canonical', True),
+                    parent_question_id=question_data.get('parent_question_id'),
+                    similarity_score=question_data.get('similarity_score'),
+                    has_subparts=question_data.get('has_subparts', False),
+                    has_mathematical_notation=question_data.get('has_mathematical_notation', False),
+                    page_number=question_data.get('page_number'),
+                    topic_tags=topic_tags_json,
+                    is_reviewed=False,  # All questions start as unreviewed
+                    review_status=ReviewStatus.PENDING
+                )
+                
+                db.add(question)
+                db.flush()  # Get the question_id
+                saved_count += 1
+                logger.debug(f"Saved question {idx+1}/{len(questions)}: {question_data.get('question_number')}")
         
-        # Store embedding in vector database
-        if 'embedding' in question_data:
-            # Store in Pinecone/Qdrant
-            # For now, store in MongoDB
-            mongo_db.question_embeddings.insert_one({
-                'question_id': question.question_id,
-                'course_code': paper.course_code,
-                'embedding': question_data['embedding'],
-                'metadata': {
-                    'unit_id': question_data.get('unit_id'),
-                    'marks': question_data.get('marks'),
-                    'bloom_level': question_data.get('bloom_level')
-                }
-            })
-    
-    # Update paper with review count
-    paper.questions_in_review = review_count
-    db.commit()
+                # Add ALL non-reviewed questions to review queue
+                # This ensures all questions appear in the review queue
+                classification_confidence = question_data.get('classification_confidence', 0)
+                unit_id = question_data.get('unit_id')
+                
+                # Determine issue type and priority
+                if unit_id is None:
+                    issue_type = 'AMBIGUOUS_UNIT'
+                    priority = 1
+                elif classification_confidence < 0.7:
+                    issue_type = 'LOW_CONFIDENCE'
+                    priority = 2
+                else:
+                    issue_type = 'NEEDS_REVIEW'
+                    priority = 3
+                
+                review_queue = ReviewQueue(
+                    question_id=question.question_id,
+                    issue_type=issue_type,
+                    suggested_correction=json.dumps({
+                        'unit_id': question_data.get('unit_id'),
+                        'unit_name': question_data.get('unit_name'),
+                        'bloom_level': question_data.get('bloom_taxonomy_level'),
+                        'bloom_category': question_data.get('bloom_category'),
+                        'marks': question_data.get('marks'),
+                        'topic_tags': question_data.get('topic_tags', [])
+                    }),
+                    priority=priority,
+                    status='PENDING'
+                )
+                
+                db.add(review_queue)
+                review_count += 1
+                
+                # Store embedding in vector database (optional, for duplicate detection)
+                # Can generate embedding later if needed for similarity search
+                if mongo_db:
+                    try:
+                        # Store question metadata in MongoDB for future reference
+                        mongo_db.question_metadata.insert_one({
+                            'question_id': question.question_id,
+                            'course_code': paper.course_code,
+                            'unit_id': question_data.get('unit_id'),
+                            'topic_tags': question_data.get('topic_tags', []),
+                            'marks': question_data.get('marks'),
+                            'bloom_level': question_data.get('bloom_taxonomy_level')
+                        })
+                    except Exception as e:
+                        logger.warning(f"Failed to store question metadata in MongoDB: {e}")
+                        
+            except Exception as e:
+                logger.error(f"Failed to save question {idx}: {e}", exc_info=True)
+                continue
+        
+        # Update paper with review count
+        paper.questions_in_review = review_count
+        db.commit()
+        logger.info(f"Successfully saved {saved_count}/{len(questions)} questions for paper {paper.paper_id}")
+        
+    except Exception as e:
+        logger.error(f"Error saving questions: {e}", exc_info=True)
+        db.rollback()
+        raise
 
 @celery.task
 def cleanup_temp_uploads():

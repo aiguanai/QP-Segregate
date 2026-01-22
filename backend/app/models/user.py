@@ -23,3 +23,5 @@ class User(Base):
     branch = relationship("Branch", back_populates="users")
     uploaded_papers = relationship("QuestionPaper", back_populates="uploader")
     bookmarks = relationship("StudentBookmark", back_populates="student")
+    course_selections = relationship("StudentCourseSelection", back_populates="student")
+    activity_logs = relationship("ActivityLog", back_populates="user")

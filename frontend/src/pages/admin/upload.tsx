@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import Head from 'next/head'
 import { useRouter } from 'next/router'
 import { useDropzone } from 'react-dropzone'
@@ -24,6 +24,14 @@ interface UploadState {
   status?: string
 }
 
+interface Course {
+  course_code: string
+  course_name: string
+  credits: number
+  course_type: string
+  description?: string
+}
+
 export default function AdminUpload() {
   const { user } = useAuth()
   const router = useRouter()
@@ -37,7 +45,43 @@ export default function AdminUpload() {
   })
   const [uploading, setUploading] = useState(false)
   const [processing, setProcessing] = useState(false)
-  const [fileType, setFileType] = useState<'question_paper' | 'syllabus'>('question_paper')
+  const [courses, setCourses] = useState<Course[]>([])
+  const [loadingCourses, setLoadingCourses] = useState(true)
+  
+  // Read file type from query parameter, default to 'question_paper'
+  const queryFileType = router.query.type as string
+  const [fileType, setFileType] = useState<'question_paper' | 'syllabus'>(
+    queryFileType === 'syllabus' ? 'syllabus' : 'question_paper'
+  )
+
+  // Update file type when query parameter changes
+  useEffect(() => {
+    if (router.query.type === 'syllabus') {
+      setFileType('syllabus')
+    } else if (router.query.type === 'question_paper') {
+      setFileType('question_paper')
+    }
+  }, [router.query.type])
+
+  useEffect(() => {
+    if (!user) {
+      router.push('/admin/login')
+      return
+    }
+    fetchCourses()
+  }, [user, router])
+
+  const fetchCourses = async () => {
+    try {
+      const response = await api.get('/api/courses')
+      setCourses(response.data)
+    } catch (error) {
+      console.error('Failed to fetch courses:', error)
+      toast.error('Failed to load courses')
+    } finally {
+      setLoadingCourses(false)
+    }
+  }
 
   const onDrop = useCallback(async (acceptedFiles: File[]) => {
     if (acceptedFiles.length === 0) return
@@ -171,24 +215,80 @@ export default function AdminUpload() {
     setProcessing(true)
 
     try {
-      const response = await api.post('/api/admin/submit-metadata', {
+      const payload: any = {
         upload_id: uploadState.uploadId,
         file_type: fileType,
         ...metadata,
         exam_type: fileType === 'question_paper' ? metadata.exam_type : undefined
-      })
-
-      const result = response.data
+      }
+      // Only include exam_date if it has a value
+      if (!payload.exam_date || payload.exam_date.trim() === '') {
+        payload.exam_date = null
+      }
+      
+      // Show processing state immediately
       setUploadState({
         ...uploadState,
         step: 'processing',
-        paperId: result.paper_id,
-        taskId: result.task_id
+        progress: 0
       })
+      
+      toast.loading(fileType === 'question_paper' ? 'Processing question paper...' : 'Uploading syllabus...', { id: 'processing' })
+      
+      const response = await api.post('/api/admin/submit-metadata', payload)
 
-      // Start polling for processing status
-      pollProcessingStatus(result.paper_id)
-      toast.success('Processing started!')
+      const result = response.data
+      
+      if (fileType === 'question_paper') {
+        // Processing is now synchronous, so check final status
+        try {
+          const statusResponse = await api.get(`/api/admin/processing-status/${result.paper_id}`)
+          const status = statusResponse.data
+          
+          if (status.status === 'COMPLETED') {
+            setUploadState({
+              ...uploadState,
+              step: 'completed',
+              paperId: result.paper_id,
+              progress: 100
+            })
+            toast.success('Processing completed!', { id: 'processing' })
+          } else if (status.status === 'FAILED') {
+            setUploadState({
+              ...uploadState,
+              step: 'processing',
+              paperId: result.paper_id,
+              progress: 0
+            })
+            toast.error('Processing failed', { id: 'processing' })
+          } else {
+            // If still processing, start polling (fallback)
+            setUploadState({
+              ...uploadState,
+              step: 'processing',
+              paperId: result.paper_id,
+              taskId: result.task_id
+            })
+            pollProcessingStatus(result.paper_id)
+          }
+        } catch (statusError) {
+          // If we can't get status, assume it completed
+          setUploadState({
+            ...uploadState,
+            step: 'completed',
+            paperId: result.paper_id
+          })
+          toast.success('Question paper uploaded and processed!', { id: 'processing' })
+        }
+      } else {
+        // Syllabus is always completed immediately
+        setUploadState({
+          ...uploadState,
+          step: 'completed',
+          paperId: result.paper_id
+        })
+        toast.success('Syllabus uploaded successfully!', { id: 'processing' })
+      }
     } catch (error) {
       toast.error('Failed to submit metadata')
     } finally {
@@ -197,10 +297,27 @@ export default function AdminUpload() {
   }
 
   const pollProcessingStatus = async (paperId: number) => {
+    let pollCount = 0
+    const maxPolls = 300 // Maximum 10 minutes (300 * 2 seconds)
+    let consecutiveErrors = 0
+    const maxConsecutiveErrors = 10
+    
     const pollInterval = setInterval(async () => {
+      pollCount++
+      
+      // Timeout after max polls
+      if (pollCount > maxPolls) {
+        clearInterval(pollInterval)
+        toast.error('Processing is taking longer than expected. Please check the processing status manually.')
+        setUploadState(prev => ({ ...prev, step: 'completed' }))
+        return
+      }
+      
       try {
         const response = await api.get(`/api/admin/processing-status/${paperId}`)
         const status = response.data
+        consecutiveErrors = 0 // Reset error count on success
+        
         setUploadState(prev => ({
           ...prev,
           progress: status.progress,
@@ -214,9 +331,22 @@ export default function AdminUpload() {
         } else if (status.status === 'FAILED') {
           clearInterval(pollInterval)
           toast.error('Processing failed')
+        } else if (status.status === 'METADATA_PENDING' && pollCount > 10) {
+          // If still in METADATA_PENDING after 20 seconds, Celery might not be running
+          clearInterval(pollInterval)
+          toast('File uploaded successfully. Note: Background processing may not be running. Please check Celery worker status.', { icon: 'ℹ️' })
+          setUploadState(prev => ({ ...prev, step: 'completed' }))
         }
       } catch (error) {
         console.error('Failed to poll status:', error)
+        consecutiveErrors++
+        
+        // Stop polling after too many consecutive errors
+        if (consecutiveErrors >= maxConsecutiveErrors) {
+          clearInterval(pollInterval)
+          toast.error('Unable to check processing status. Please check manually.')
+          setUploadState(prev => ({ ...prev, step: 'completed' }))
+        }
       }
     }, 2000)
   }
@@ -236,7 +366,7 @@ export default function AdminUpload() {
   return (
     <>
       <Head>
-        <title>Upload Question Paper - QPaper AI</title>
+        <title>{fileType === 'syllabus' ? 'Upload Syllabus' : 'Upload Question Paper'} - QPaper AI</title>
       </Head>
 
       <div className="min-h-screen bg-gray-50 dark:bg-gray-900 transition-colors">
@@ -251,7 +381,9 @@ export default function AdminUpload() {
                 >
                   ← Back to Dashboard
                 </button>
-                <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Upload Question Paper</h1>
+                <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
+                  {fileType === 'syllabus' ? 'Upload Syllabus' : 'Upload Question Paper'}
+                </h1>
               </div>
               <ThemeToggle />
             </div>
@@ -356,13 +488,14 @@ export default function AdminUpload() {
                       className="input-field mt-1 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
                       value={metadata.course_code}
                       onChange={handleChange}
+                      disabled={loadingCourses}
                     >
-                      <option value="">Select Course</option>
-                      <option value="CS301">CS301 - Database Management Systems</option>
-                      <option value="CS302">CS302 - Computer Networks</option>
-                      <option value="CS303">CS303 - Software Engineering</option>
-                      <option value="MA201">MA201 - Mathematics</option>
-                      <option value="EC301">EC301 - Digital Electronics</option>
+                      <option value="">{loadingCourses ? 'Loading courses...' : 'Select Course'}</option>
+                      {courses.map((course) => (
+                        <option key={course.course_code} value={course.course_code}>
+                          {course.course_code} - {course.course_name}
+                        </option>
+                      ))}
                     </select>
                   </div>
 

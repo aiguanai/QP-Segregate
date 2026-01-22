@@ -25,6 +25,11 @@ class DifficultyLevel(str, enum.Enum):
     MEDIUM = "Medium"
     HARD = "Hard"
 
+class ReviewStatus(str, enum.Enum):
+    PENDING = "PENDING"
+    APPROVED = "APPROVED"
+    NEEDS_REVIEW = "NEEDS_REVIEW"
+
 class Question(Base):
     __tablename__ = "questions"
     
@@ -47,6 +52,9 @@ class Question(Base):
     has_mathematical_notation = Column(Boolean, default=False)
     image_path = Column(String(500), nullable=True)  # Cropped question image
     page_number = Column(Integer, nullable=True)
+    topic_tags = Column(Text, nullable=True)  # JSON string array of topic tags
+    is_reviewed = Column(Boolean, default=False)
+    review_status = Column(Enum(ReviewStatus), default=ReviewStatus.PENDING)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     
@@ -86,3 +94,15 @@ class StudentBookmark(Base):
     # Relationships
     student = relationship("User", back_populates="bookmarks")
     question = relationship("Question", back_populates="bookmarks")
+
+class StudentCourseSelection(Base):
+    __tablename__ = "student_course_selections"
+    
+    selection_id = Column(Integer, primary_key=True, index=True)
+    student_id = Column(Integer, ForeignKey("users.user_id"), nullable=False)
+    course_code = Column(String(10), ForeignKey("courses.course_code"), nullable=False)
+    selected_at = Column(DateTime(timezone=True), server_default=func.now())
+    
+    # Relationships
+    student = relationship("User", back_populates="course_selections")
+    course = relationship("Course")

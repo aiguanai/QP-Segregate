@@ -3,7 +3,8 @@ from .branch import Branch
 from .user import User
 from .course import Course, CourseOffering, CourseEquivalence, CourseUnit
 from .question_paper import QuestionPaper
-from .question import Question, ReviewQueue, StudentBookmark
+from .question import Question, ReviewQueue, StudentBookmark, StudentCourseSelection
+from .activity_log import ActivityLog
 
 __all__ = [
     "Base",
@@ -16,5 +17,7 @@ __all__ = [
     "QuestionPaper",
     "Question",
     "ReviewQueue",
-    "StudentBookmark"
+    "StudentBookmark",
+    "StudentCourseSelection",
+    "ActivityLog"
 ]

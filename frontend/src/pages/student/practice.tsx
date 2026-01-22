@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import Head from 'next/head'
 import { useAuth } from '../../hooks/useAuth'
 import { useRouter } from 'next/router'
+import ThemeToggle from '../../components/ThemeToggle'
 import { 
   AcademicCapIcon,
   ClockIcon,
@@ -139,25 +140,25 @@ export default function StudentPractice() {
   }
 
   const getBloomLevelColor = (level?: number) => {
-    if (!level) return 'bg-gray-100 text-gray-800'
+    if (!level) return 'bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200'
     
     const colors = {
-      1: 'bg-red-100 text-red-800',
-      2: 'bg-orange-100 text-orange-800',
-      3: 'bg-yellow-100 text-yellow-800',
-      4: 'bg-blue-100 text-blue-800',
-      5: 'bg-purple-100 text-purple-800',
-      6: 'bg-green-100 text-green-800'
+      1: 'bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-200',
+      2: 'bg-orange-100 dark:bg-orange-900 text-orange-800 dark:text-orange-200',
+      3: 'bg-yellow-100 dark:bg-yellow-900 text-yellow-800 dark:text-yellow-200',
+      4: 'bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200',
+      5: 'bg-purple-100 dark:bg-purple-900 text-purple-800 dark:text-purple-200',
+      6: 'bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200'
     }
-    return colors[level as keyof typeof colors] || 'bg-gray-100 text-gray-800'
+    return colors[level as keyof typeof colors] || 'bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200'
   }
 
   const getDifficultyColor = (level?: string) => {
     switch (level) {
-      case 'Easy': return 'bg-green-100 text-green-800'
-      case 'Medium': return 'bg-yellow-100 text-yellow-800'
-      case 'Hard': return 'bg-red-100 text-red-800'
-      default: return 'bg-gray-100 text-gray-800'
+      case 'Easy': return 'bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200'
+      case 'Medium': return 'bg-yellow-100 dark:bg-yellow-900 text-yellow-800 dark:text-yellow-200'
+      case 'Hard': return 'bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-200'
+      default: return 'bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200'
     }
   }
 
@@ -171,34 +172,37 @@ export default function StudentPractice() {
         <title>Practice Mode - QPaper AI</title>
       </Head>
 
-      <div className="min-h-screen bg-gray-50">
+      <div className="min-h-screen bg-gray-50 dark:bg-gray-900 transition-colors">
         {/* Header */}
-        <header className="bg-white shadow-sm">
+        <header className="bg-white dark:bg-gray-800 shadow-sm border-b border-gray-200 dark:border-gray-700 transition-colors">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div className="flex justify-between items-center py-4">
-              <div className="flex items-center">
+              <div className="flex items-center space-x-4">
                 <button
                   onClick={() => router.push('/student/dashboard')}
-                  className="text-primary-600 hover:text-primary-500 mr-4"
+                  className="text-primary-600 dark:text-primary-400 hover:text-primary-500 dark:hover:text-primary-300 transition-colors"
                 >
-                  ← Back to Dashboard
+                  <ArrowLeftIcon className="h-5 w-5" />
                 </button>
-                <h1 className="text-2xl font-bold text-gray-900">Practice Mode</h1>
+                <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Practice Mode</h1>
               </div>
-              {practiceStarted && (
-                <div className="flex items-center space-x-4">
-                  <div className="flex items-center text-sm text-gray-600">
-                    <ClockIcon className="h-4 w-4 mr-1" />
-                    {formatTime(timeElapsed)}
+              <div className="flex items-center space-x-4">
+                {practiceStarted && (
+                  <div className="flex items-center space-x-4">
+                    <div className="flex items-center text-sm text-gray-600 dark:text-gray-300">
+                      <ClockIcon className="h-4 w-4 mr-1" />
+                      {formatTime(timeElapsed)}
+                    </div>
+                    <button
+                      onClick={endPractice}
+                      className="text-sm text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white px-3 py-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+                    >
+                      End Practice
+                    </button>
                   </div>
-                  <button
-                    onClick={endPractice}
-                    className="text-sm text-gray-600 hover:text-gray-900"
-                  >
-                    End Practice
-                  </button>
-                </div>
-              )}
+                )}
+                <ThemeToggle />
+              </div>
             </div>
           </div>
         </header>
@@ -207,12 +211,12 @@ export default function StudentPractice() {
           {!practiceStarted ? (
             /* Practice Settings */
             <div className="card">
-              <h2 className="text-lg font-semibold text-gray-900 mb-6">Practice Settings</h2>
+              <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-6">Practice Settings</h2>
               
               <form onSubmit={(e) => { e.preventDefault(); startPractice(); }} className="space-y-6">
                 <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                       Course *
                     </label>
                     <select
@@ -231,7 +235,7 @@ export default function StudentPractice() {
                   </div>
 
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                       Number of Questions
                     </label>
                     <select
@@ -249,7 +253,7 @@ export default function StudentPractice() {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                     Bloom Levels (Optional)
                   </label>
                   <div className="grid grid-cols-3 gap-2">
@@ -257,7 +261,7 @@ export default function StudentPractice() {
                       <label key={level} className="flex items-center">
                         <input
                           type="checkbox"
-                          className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                          className="rounded border-gray-300 dark:border-gray-600 text-primary-600 focus:ring-primary-500 dark:bg-gray-700"
                           checked={settings.bloom_levels.includes(level)}
                           onChange={(e) => {
                             if (e.target.checked) {
@@ -267,7 +271,7 @@ export default function StudentPractice() {
                             }
                           }}
                         />
-                        <span className="ml-2 text-sm text-gray-700">L{level}</span>
+                        <span className="ml-2 text-sm text-gray-700 dark:text-gray-300">L{level}</span>
                       </label>
                     ))}
                   </div>
@@ -290,16 +294,16 @@ export default function StudentPractice() {
               {/* Progress Bar */}
               <div className="card">
                 <div className="flex justify-between items-center mb-2">
-                  <span className="text-sm font-medium text-gray-700">
+                  <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
                     Question {currentQuestionIndex + 1} of {questions.length}
                   </span>
-                  <span className="text-sm text-gray-600">
+                  <span className="text-sm text-gray-600 dark:text-gray-400">
                     {Math.round(((currentQuestionIndex + 1) / questions.length) * 100)}% Complete
                   </span>
                 </div>
-                <div className="w-full bg-gray-200 rounded-full h-2">
+                <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
                   <div
-                    className="bg-primary-600 h-2 rounded-full transition-all duration-300"
+                    className="bg-primary-600 dark:bg-primary-500 h-2 rounded-full transition-all duration-300"
                     style={{ width: `${((currentQuestionIndex + 1) / questions.length) * 100}%` }}
                   ></div>
                 </div>
@@ -309,19 +313,19 @@ export default function StudentPractice() {
               <div className="card">
                 <div className="flex items-center justify-between mb-4">
                   <div className="flex items-center space-x-2">
-                    <AcademicCapIcon className="h-5 w-5 text-primary-600" />
-                    <span className="text-sm font-medium text-gray-700">
+                    <AcademicCapIcon className="h-5 w-5 text-primary-600 dark:text-primary-400" />
+                    <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
                       {questions[currentQuestionIndex].course_code}
                     </span>
                     {questions[currentQuestionIndex].unit_name && (
-                      <span className="text-sm text-gray-600">
+                      <span className="text-sm text-gray-600 dark:text-gray-400">
                         • {questions[currentQuestionIndex].unit_name}
                       </span>
                     )}
                   </div>
                   <div className="flex items-center space-x-2">
                     {questions[currentQuestionIndex].marks && (
-                      <span className="bg-blue-100 text-blue-800 px-2 py-1 rounded text-xs">
+                      <span className="bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 px-2 py-1 rounded text-xs">
                         {questions[currentQuestionIndex].marks} marks
                       </span>
                     )}
@@ -339,7 +343,7 @@ export default function StudentPractice() {
                 </div>
 
                 <div className="mb-6">
-                  <h3 className="text-lg font-medium text-gray-900 mb-4">
+                  <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-4">
                     {questions[currentQuestionIndex].question_text}
                   </h3>
                 </div>
@@ -364,7 +368,7 @@ export default function StudentPractice() {
                     </button>
                   </div>
 
-                  <div className="text-sm text-gray-600">
+                  <div className="text-sm text-gray-600 dark:text-gray-400">
                     {questions[currentQuestionIndex].exam_type} • {questions[currentQuestionIndex].academic_year}
                   </div>
                 </div>
@@ -372,23 +376,23 @@ export default function StudentPractice() {
 
               {/* Session Summary */}
               <div className="card">
-                <h3 className="text-lg font-medium text-gray-900 mb-4">Session Summary</h3>
+                <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-4">Session Summary</h3>
                 <div className="grid grid-cols-2 gap-4 text-sm">
                   <div>
-                    <span className="text-gray-600">Questions Completed:</span>
-                    <span className="ml-2 font-medium">{currentQuestionIndex + 1}</span>
+                    <span className="text-gray-600 dark:text-gray-400">Questions Completed:</span>
+                    <span className="ml-2 font-medium text-gray-900 dark:text-white">{currentQuestionIndex + 1}</span>
                   </div>
                   <div>
-                    <span className="text-gray-600">Time Elapsed:</span>
-                    <span className="ml-2 font-medium">{formatTime(timeElapsed)}</span>
+                    <span className="text-gray-600 dark:text-gray-400">Time Elapsed:</span>
+                    <span className="ml-2 font-medium text-gray-900 dark:text-white">{formatTime(timeElapsed)}</span>
                   </div>
                   <div>
-                    <span className="text-gray-600">Remaining:</span>
-                    <span className="ml-2 font-medium">{questions.length - currentQuestionIndex - 1}</span>
+                    <span className="text-gray-600 dark:text-gray-400">Remaining:</span>
+                    <span className="ml-2 font-medium text-gray-900 dark:text-white">{questions.length - currentQuestionIndex - 1}</span>
                   </div>
                   <div>
-                    <span className="text-gray-600">Average Time per Question:</span>
-                    <span className="ml-2 font-medium">
+                    <span className="text-gray-600 dark:text-gray-400">Average Time per Question:</span>
+                    <span className="ml-2 font-medium text-gray-900 dark:text-white">
                       {currentQuestionIndex > 0 ? formatTime(Math.round(timeElapsed / (currentQuestionIndex + 1))) : '0:00'}
                     </span>
                   </div>
@@ -397,9 +401,9 @@ export default function StudentPractice() {
             </div>
           ) : (
             <div className="text-center py-12">
-              <AcademicCapIcon className="h-16 w-16 text-gray-400 mx-auto mb-4" />
-              <h2 className="text-2xl font-bold text-gray-900 mb-2">No Questions Found</h2>
-              <p className="text-gray-600 mb-6">
+              <AcademicCapIcon className="h-16 w-16 text-gray-400 dark:text-gray-500 mx-auto mb-4" />
+              <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">No Questions Found</h2>
+              <p className="text-gray-600 dark:text-gray-400 mb-6">
                 No questions match your current settings. Try adjusting your filters.
               </p>
               <button

@@ -2,13 +2,17 @@ import { useState, useEffect } from 'react'
 import Head from 'next/head'
 import { useRouter } from 'next/router'
 import { useAuth } from '../../hooks/useAuth'
+import ThemeToggle from '../../components/ThemeToggle'
+import { api } from '../../utils/api'
 import { 
   MagnifyingGlassIcon, 
   BookmarkIcon, 
   FunnelIcon,
   ChevronDownIcon,
-  ChevronUpIcon
+  ChevronUpIcon,
+  ArrowLeftIcon
 } from '@heroicons/react/24/outline'
+import toast from 'react-hot-toast'
 
 interface Question {
   question_id: number
@@ -24,6 +28,10 @@ interface Question {
   semester_type: string
   exam_date?: string
   variant_count: number
+  topic_tags?: string[]
+  is_reviewed?: boolean
+  review_status?: string
+  image_path?: string
 }
 
 interface SearchFilters {
@@ -35,10 +43,12 @@ interface SearchFilters {
   exam_types: string[]
   year_from?: number
   year_to?: number
+  topic_tags?: string[]
+  review_status?: string  // 'all', 'reviewed', 'non-reviewed'
 }
 
 export default function StudentSearch() {
-  const { user } = useAuth()
+  const { user, logout } = useAuth()
   const router = useRouter()
   const [questions, setQuestions] = useState<Question[]>([])
   const [loading, setLoading] = useState(false)
@@ -48,11 +58,14 @@ export default function StudentSearch() {
     course_codes: [],
     unit_ids: [],
     bloom_levels: [],
-    exam_types: []
+    exam_types: [],
+    review_status: 'all'  // Default to showing all questions (including non-reviewed)
   })
   const [courses, setCourses] = useState<any[]>([])
+  const [availableUnits, setAvailableUnits] = useState<any[]>([])
   const [totalResults, setTotalResults] = useState(0)
   const [currentPage, setCurrentPage] = useState(1)
+  const [isInitialLoad, setIsInitialLoad] = useState(true)
 
   useEffect(() => {
     if (!user) {
@@ -60,54 +73,88 @@ export default function StudentSearch() {
       return
     }
 
+    fetchCourses()
+
     // Get search query from URL
-    const { q } = router.query
+    const { q, course } = router.query
     if (q && typeof q === 'string') {
       setSearchQuery(q)
       performSearch(q)
+    } else if (course && typeof course === 'string') {
+      // If course filter is in URL, set it and show questions for that course
+      setFilters(prev => ({
+        ...prev,
+        course_codes: [course]
+      }))
+      // Perform search with empty query to show all questions for the course
+      setTimeout(() => performSearch(''), 100)
+    } else {
+      // Show all questions on page load (empty search)
+      setTimeout(() => {
+        performSearch('')
+        setIsInitialLoad(false)
+      }, 500)
     }
-
-    fetchCourses()
   }, [user, router])
 
   const fetchCourses = async () => {
     try {
-      const response = await fetch('/api/courses', {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
+      const response = await api.get('/api/courses')
+      setCourses(Array.isArray(response.data) ? response.data : [])
+    } catch (error: any) {
+      console.error('Failed to fetch courses:', error)
+      setCourses([])
+    }
+  }
+
+  const fetchUnitsForCourses = async (courseCodes: string[]) => {
+    if (courseCodes.length === 0) {
+      setAvailableUnits([])
+      return
+    }
+    
+    try {
+      // Fetch units for all selected courses
+      const unitPromises = courseCodes.map(async (courseCode) => {
+        try {
+          const response = await api.get(`/api/courses/${courseCode}/units`)
+          return response.data.map((unit: any) => ({
+            ...unit,
+            course_code: courseCode
+          }))
+        } catch (error) {
+          console.error(`Failed to fetch units for ${courseCode}:`, error)
+          return []
         }
       })
-      const data = await response.json()
-      setCourses(data)
-    } catch (error) {
-      console.error('Failed to fetch courses:', error)
+      
+      const unitsArrays = await Promise.all(unitPromises)
+      const allUnits = unitsArrays.flat()
+      setAvailableUnits(allUnits)
+    } catch (error: any) {
+      console.error('Failed to fetch units:', error)
+      setAvailableUnits([])
     }
   }
 
   const performSearch = async (query: string = searchQuery) => {
-    if (!query.trim()) return
-
     setLoading(true)
     try {
-      const response = await fetch('/api/student/search', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        },
-        body: JSON.stringify({
-          query,
-          filters,
-          page: currentPage,
-          limit: 20
-        })
+      const response = await api.post('/api/student/search', {
+        query: query.trim() || '',  // Allow empty query to show all questions
+        filters: filters || {},
+        page: currentPage,
+        limit: 20
       })
 
-      const data = await response.json()
-      setQuestions(data.questions)
-      setTotalResults(data.total)
-    } catch (error) {
+      setQuestions(Array.isArray(response.data.questions) ? response.data.questions : [])
+      setTotalResults(response.data.total || 0)
+    } catch (error: any) {
       console.error('Search failed:', error)
+      const errorMessage = error.response?.data?.detail || error.message || 'Failed to search questions'
+      toast.error(errorMessage)
+      setQuestions([])
+      setTotalResults(0)
     } finally {
       setLoading(false)
     }
@@ -120,55 +167,80 @@ export default function StudentSearch() {
   }
 
   const handleFilterChange = (filterType: keyof SearchFilters, value: any) => {
-    setFilters(prev => ({
-      ...prev,
-      [filterType]: value
-    }))
+    setFilters(prev => {
+      const newFilters = {
+        ...prev,
+        [filterType]: value
+      }
+      
+      // When course codes change, fetch units for those courses
+      if (filterType === 'course_codes') {
+        fetchUnitsForCourses(value)
+        // Clear unit_ids when courses change
+        newFilters.unit_ids = []
+      }
+      
+      return newFilters
+    })
+    // Trigger search when filters change
+    setCurrentPage(1)
   }
+
+  // Trigger search when filters change (but not on initial mount)
+  useEffect(() => {
+    if (user && !isInitialLoad) {
+      const timeoutId = setTimeout(() => {
+        performSearch(searchQuery)
+      }, 300) // Debounce filter changes
+      return () => clearTimeout(timeoutId)
+    }
+  }, [filters])
 
   const clearFilters = () => {
     setFilters({
       course_codes: [],
       unit_ids: [],
       bloom_levels: [],
-      exam_types: []
+      exam_types: [],
+      topic_tags: [],
+      review_status: 'all'
     })
   }
 
   const bookmarkQuestion = async (questionId: number) => {
     try {
-      await fetch(`/api/student/bookmark/${questionId}`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        }
-      })
-      // Show success message
-    } catch (error) {
+      await api.post(`/api/student/bookmark/${questionId}`)
+      toast.success('Question bookmarked successfully!')
+    } catch (error: any) {
       console.error('Failed to bookmark question:', error)
+      if (error.response?.status === 400) {
+        toast.error('Question is already bookmarked')
+      } else {
+        toast.error('Failed to bookmark question')
+      }
     }
   }
 
   const getBloomLevelColor = (level?: number) => {
-    if (!level) return 'bg-gray-100 text-gray-800'
+    if (!level) return 'bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200'
     
     const colors = {
-      1: 'bg-red-100 text-red-800',
-      2: 'bg-orange-100 text-orange-800',
-      3: 'bg-yellow-100 text-yellow-800',
-      4: 'bg-blue-100 text-blue-800',
-      5: 'bg-purple-100 text-purple-800',
-      6: 'bg-green-100 text-green-800'
+      1: 'bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-200',
+      2: 'bg-orange-100 dark:bg-orange-900 text-orange-800 dark:text-orange-200',
+      3: 'bg-yellow-100 dark:bg-yellow-900 text-yellow-800 dark:text-yellow-200',
+      4: 'bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200',
+      5: 'bg-purple-100 dark:bg-purple-900 text-purple-800 dark:text-purple-200',
+      6: 'bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200'
     }
-    return colors[level as keyof typeof colors] || 'bg-gray-100 text-gray-800'
+    return colors[level as keyof typeof colors] || 'bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200'
   }
 
   const getDifficultyColor = (level?: string) => {
     switch (level) {
-      case 'Easy': return 'bg-green-100 text-green-800'
-      case 'Medium': return 'bg-yellow-100 text-yellow-800'
-      case 'Hard': return 'bg-red-100 text-red-800'
-      default: return 'bg-gray-100 text-gray-800'
+      case 'Easy': return 'bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200'
+      case 'Medium': return 'bg-yellow-100 dark:bg-yellow-900 text-yellow-800 dark:text-yellow-200'
+      case 'Hard': return 'bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-200'
+      default: return 'bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200'
     }
   }
 
@@ -182,19 +254,28 @@ export default function StudentSearch() {
         <title>Search Questions - QPaper AI</title>
       </Head>
 
-      <div className="min-h-screen bg-gray-50">
+      <div className="min-h-screen bg-gray-50 dark:bg-gray-900 transition-colors">
         {/* Header */}
-        <header className="bg-white shadow-sm">
+        <header className="bg-white dark:bg-gray-800 shadow-sm border-b border-gray-200 dark:border-gray-700 transition-colors">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div className="flex justify-between items-center py-4">
-              <div className="flex items-center">
+              <div className="flex items-center space-x-4">
                 <button
                   onClick={() => router.push('/student/dashboard')}
-                  className="text-primary-600 hover:text-primary-500 mr-4"
+                  className="text-primary-600 dark:text-primary-400 hover:text-primary-500 dark:hover:text-primary-300 transition-colors"
                 >
-                  ← Back to Dashboard
+                  <ArrowLeftIcon className="h-5 w-5" />
                 </button>
-                <h1 className="text-2xl font-bold text-gray-900">Search Questions</h1>
+                <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Search Questions</h1>
+              </div>
+              <div className="flex items-center space-x-4">
+                <ThemeToggle />
+                <button
+                  onClick={logout}
+                  className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white"
+                >
+                  Logout
+                </button>
               </div>
             </div>
           </div>
@@ -202,14 +283,14 @@ export default function StudentSearch() {
 
         <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
           {/* Search Form */}
-          <div className="card mb-6">
+          <div className="card mb-6 dark:bg-gray-800 dark:border-gray-700">
             <form onSubmit={handleSearch} className="space-y-4">
               <div className="flex space-x-4">
                 <div className="flex-1">
                   <input
                     type="text"
-                    placeholder="Search for questions (e.g., 'explain database joins')"
-                    className="input-field"
+                    placeholder="Search for questions (leave empty to browse all questions)"
+                    className="input-field dark:bg-gray-700 dark:border-gray-600 dark:text-white"
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                   />
@@ -222,13 +303,32 @@ export default function StudentSearch() {
                   <MagnifyingGlassIcon className="h-5 w-5 mr-2" />
                   {loading ? 'Searching...' : 'Search'}
                 </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    setSearchQuery('')
+                    setCurrentPage(1)
+                    setFilters({
+                      course_codes: [],
+                      unit_ids: [],
+                      bloom_levels: [],
+                      exam_types: [],
+                      review_status: 'all'
+                    })
+                    await performSearch('')
+                  }}
+                  className="btn-secondary"
+                  disabled={loading}
+                >
+                  Browse All
+                </button>
               </div>
 
               <div className="flex items-center justify-between">
                 <button
                   type="button"
                   onClick={() => setShowFilters(!showFilters)}
-                  className="flex items-center text-sm text-gray-600 hover:text-gray-900"
+                  className="flex items-center text-sm text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white transition-colors"
                 >
                   <FunnelIcon className="h-4 w-4 mr-2" />
                   Filters
@@ -239,11 +339,11 @@ export default function StudentSearch() {
                   )}
                 </button>
 
-                {Object.values(filters).some(arr => Array.isArray(arr) ? arr.length > 0 : arr !== undefined && arr !== '') && (
+                {Object.values(filters).some(arr => Array.isArray(arr) ? arr.length > 0 : arr !== undefined && arr !== '' && arr !== 'all') && (
                   <button
                     type="button"
                     onClick={clearFilters}
-                    className="text-sm text-primary-600 hover:text-primary-500"
+                    className="text-sm text-primary-600 dark:text-primary-400 hover:text-primary-500 dark:hover:text-primary-300 transition-colors"
                   >
                     Clear Filters
                   </button>
@@ -255,10 +355,10 @@ export default function StudentSearch() {
           {/* Filters */}
           {showFilters && (
             <div className="card mb-6">
-              <h3 className="text-lg font-medium text-gray-900 mb-4">Filters</h3>
+              <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-4">Filters</h3>
               <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                     Course
                   </label>
                   <select
@@ -266,17 +366,70 @@ export default function StudentSearch() {
                     className="input-field"
                     value={filters.course_codes}
                     onChange={(e) => handleFilterChange('course_codes', Array.from(e.target.selectedOptions, option => option.value))}
+                    size={5}
                   >
-                    {courses.map(course => (
-                      <option key={course.course_code} value={course.course_code}>
-                        {course.course_code} - {course.course_name}
-                      </option>
-                    ))}
+                    {courses.length > 0 ? (
+                      courses.map(course => (
+                        <option key={course.course_code} value={course.course_code}>
+                          {course.course_code} - {course.course_name}
+                        </option>
+                      ))
+                    ) : (
+                      <option disabled>No courses available</option>
+                    )}
                   </select>
+                  {courses.length === 0 && (
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Loading courses...</p>
+                  )}
                 </div>
 
+                {/* Units Filter - Only show when courses are selected */}
+                {filters.course_codes.length > 0 && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                      Units
+                    </label>
+                    <div className="flex flex-wrap gap-2">
+                      {availableUnits.length > 0 ? (
+                        availableUnits.map((unit) => (
+                          <button
+                            key={unit.unit_id}
+                            type="button"
+                            onClick={() => {
+                              const isSelected = filters.unit_ids.includes(unit.unit_id)
+                              if (isSelected) {
+                                handleFilterChange('unit_ids', filters.unit_ids.filter(id => id !== unit.unit_id))
+                              } else {
+                                handleFilterChange('unit_ids', [...filters.unit_ids, unit.unit_id])
+                              }
+                            }}
+                            className={`px-3 py-1 rounded-full text-sm transition-colors ${
+                              filters.unit_ids.includes(unit.unit_id)
+                                ? 'bg-primary-600 dark:bg-primary-500 text-white'
+                                : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600'
+                            }`}
+                          >
+                            {unit.unit_name || `Unit ${unit.unit_number}`}
+                          </button>
+                        ))
+                      ) : (
+                        <p className="text-xs text-gray-500 dark:text-gray-400">Loading units...</p>
+                      )}
+                    </div>
+                    {filters.unit_ids.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => handleFilterChange('unit_ids', [])}
+                        className="mt-2 text-xs text-primary-600 dark:text-primary-400 hover:underline"
+                      >
+                        Clear units
+                      </button>
+                    )}
+                  </div>
+                )}
+
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                     Marks Range
                   </label>
                   <div className="flex space-x-2">
@@ -298,7 +451,7 @@ export default function StudentSearch() {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                     Bloom Level
                   </label>
                   <div className="space-y-2">
@@ -306,7 +459,7 @@ export default function StudentSearch() {
                       <label key={level} className="flex items-center">
                         <input
                           type="checkbox"
-                          className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                          className="rounded border-gray-300 dark:border-gray-600 text-primary-600 focus:ring-primary-500 dark:bg-gray-700"
                           checked={filters.bloom_levels.includes(level)}
                           onChange={(e) => {
                             if (e.target.checked) {
@@ -316,14 +469,14 @@ export default function StudentSearch() {
                             }
                           }}
                         />
-                        <span className="ml-2 text-sm text-gray-700">L{level}</span>
+                        <span className="ml-2 text-sm text-gray-700 dark:text-gray-300">L{level}</span>
                       </label>
                     ))}
                   </div>
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                     Exam Type
                   </label>
                   <div className="space-y-2">
@@ -331,7 +484,7 @@ export default function StudentSearch() {
                       <label key={type} className="flex items-center">
                         <input
                           type="checkbox"
-                          className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                          className="rounded border-gray-300 dark:border-gray-600 text-primary-600 focus:ring-primary-500 dark:bg-gray-700"
                           checked={filters.exam_types.includes(type)}
                           onChange={(e) => {
                             if (e.target.checked) {
@@ -341,10 +494,25 @@ export default function StudentSearch() {
                             }
                           }}
                         />
-                        <span className="ml-2 text-sm text-gray-700">{type}</span>
+                        <span className="ml-2 text-sm text-gray-700 dark:text-gray-300">{type}</span>
                       </label>
                     ))}
                   </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    Review Status
+                  </label>
+                  <select
+                    className="input-field"
+                    value={filters.review_status || 'all'}
+                    onChange={(e) => handleFilterChange('review_status', e.target.value)}
+                  >
+                    <option value="all">All Questions</option>
+                    <option value="reviewed">Reviewed Only</option>
+                    <option value="non-reviewed">Non-Reviewed Only</option>
+                  </select>
                 </div>
               </div>
             </div>
@@ -354,14 +522,15 @@ export default function StudentSearch() {
           <div className="space-y-4">
             {loading ? (
               <div className="text-center py-8">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600 mx-auto"></div>
-                <p className="mt-4 text-gray-600">Searching questions...</p>
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600 dark:border-primary-400 mx-auto"></div>
+                <p className="mt-4 text-gray-600 dark:text-gray-400">Loading questions...</p>
               </div>
             ) : questions.length > 0 ? (
               <>
                 <div className="flex justify-between items-center">
-                  <p className="text-sm text-gray-600">
-                    {totalResults} questions found
+                  <p className="text-sm text-gray-600 dark:text-gray-400">
+                    {totalResults} question{totalResults !== 1 ? 's' : ''} found
+                    {!searchQuery.trim() && ' (showing all questions)'}
                   </p>
                 </div>
 
@@ -370,23 +539,50 @@ export default function StudentSearch() {
                     <div className="flex justify-between items-start">
                       <div className="flex-1">
                         <div className="flex items-center space-x-2 mb-2">
-                          <span className="text-sm font-medium text-gray-900">
+                          <span className="text-sm font-medium text-gray-900 dark:text-white">
                             {question.course_code}
                           </span>
                           {question.unit_name && (
-                            <span className="text-sm text-gray-600">
+                            <span className="text-sm text-gray-600 dark:text-gray-400">
                               • {question.unit_name}
                             </span>
                           )}
                         </div>
 
-                        <p className="text-gray-900 mb-3 line-clamp-3">
+                        <p className="text-gray-900 dark:text-gray-100 mb-3 line-clamp-3">
                           {question.question_text}
                         </p>
 
-                        <div className="flex items-center space-x-4 text-sm">
+                        {question.image_path && (
+                          <div className="mb-3">
+                            <img
+                              src={`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/${question.image_path}`}
+                              alt="Question diagram"
+                              className="max-w-full h-auto rounded-lg border border-gray-200 dark:border-gray-700"
+                              onError={(e) => {
+                                // Hide image if it fails to load
+                                e.currentTarget.style.display = 'none'
+                              }}
+                            />
+                          </div>
+                        )}
+
+                        {question.topic_tags && question.topic_tags.length > 0 && (
+                          <div className="flex flex-wrap gap-1 mb-3">
+                            {question.topic_tags.map((tag: string, idx: number) => (
+                              <span
+                                key={idx}
+                                className="text-xs px-2 py-1 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded"
+                              >
+                                {tag}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+
+                        <div className="flex items-center flex-wrap gap-2 text-sm">
                           {question.marks && (
-                            <span className="bg-blue-100 text-blue-800 px-2 py-1 rounded">
+                            <span className="bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 px-2 py-1 rounded">
                               {question.marks} marks
                             </span>
                           )}
@@ -400,21 +596,26 @@ export default function StudentSearch() {
                               {question.difficulty_level}
                             </span>
                           )}
-                          <span className="text-gray-600">
-                            {question.exam_type} • {question.academic_year}
+                          {!question.is_reviewed && (
+                            <span className="px-2 py-1 bg-yellow-100 dark:bg-yellow-900 text-yellow-800 dark:text-yellow-200 rounded">
+                              Non-Reviewed
+                            </span>
+                          )}
+                          <span className="text-gray-600 dark:text-gray-400">
+                            {question.exam_type} • Year {question.academic_year}
                           </span>
                         </div>
                       </div>
 
                       <div className="flex items-center space-x-2 ml-4">
                         {question.variant_count > 0 && (
-                          <button className="text-sm text-primary-600 hover:text-primary-500">
+                          <button className="text-sm text-primary-600 dark:text-primary-400 hover:text-primary-500 dark:hover:text-primary-300 transition-colors">
                             +{question.variant_count} variants
                           </button>
                         )}
                         <button
                           onClick={() => bookmarkQuestion(question.question_id)}
-                          className="text-gray-400 hover:text-yellow-500"
+                          className="text-gray-400 dark:text-gray-500 hover:text-yellow-500 dark:hover:text-yellow-400 transition-colors"
                         >
                           <BookmarkIcon className="h-5 w-5" />
                         </button>
@@ -423,13 +624,11 @@ export default function StudentSearch() {
                   </div>
                 ))}
               </>
-            ) : searchQuery ? (
-              <div className="text-center py-8">
-                <p className="text-gray-600">No questions found for your search.</p>
-              </div>
             ) : (
               <div className="text-center py-8">
-                <p className="text-gray-600">Enter a search query to find questions.</p>
+                <p className="text-gray-600 dark:text-gray-400">
+                  {searchQuery ? 'No questions found for your search.' : 'No questions available. Try adjusting your filters.'}
+                </p>
               </div>
             )}
           </div>

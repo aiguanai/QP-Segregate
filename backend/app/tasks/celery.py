@@ -1,5 +1,6 @@
 from celery import Celery
 from app.core.config import settings
+import sys
 
 # Create Celery instance
 celery = Celery(
@@ -10,6 +11,10 @@ celery = Celery(
 )
 
 # Celery configuration
+# Use 'solo' pool on Windows (single-threaded, no multiprocessing)
+# Use 'prefork' on Linux/Unix (multiprocessing)
+worker_pool = 'solo' if sys.platform == 'win32' else 'prefork'
+
 celery.conf.update(
     task_serializer='json',
     accept_content=['json'],
@@ -21,4 +26,5 @@ celery.conf.update(
     task_soft_time_limit=25 * 60,  # 25 minutes
     worker_prefetch_multiplier=1,
     worker_max_tasks_per_child=50,
+    worker_pool=worker_pool,  # Use solo on Windows to avoid permission errors
 )

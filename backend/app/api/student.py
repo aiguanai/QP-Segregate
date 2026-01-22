@@ -1,18 +1,20 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from typing import List, Optional
+import os
 from app.core.database import get_db
 from app.models.user import User
 from app.models.question import Question, StudentBookmark
 from app.models.question_paper import QuestionPaper
 from app.models.course import Course, CourseEquivalence, CourseOffering
+from app.models.question_paper import QuestionPaper, ExamType
 from app.api.auth import get_current_user
 from pydantic import BaseModel
 
 router = APIRouter()
 
 class SearchRequest(BaseModel):
-    query: str
+    query: Optional[str] = ""
     filters: Optional[dict] = {}
     page: int = 1
     limit: int = 20
@@ -26,6 +28,8 @@ class SearchFilters(BaseModel):
     exam_types: Optional[List[str]] = None
     year_from: Optional[int] = None
     year_to: Optional[int] = None
+    topic_tags: Optional[List[str]] = None
+    review_status: Optional[str] = None  # "reviewed", "non-reviewed", or None for all
 
 class QuestionResponse(BaseModel):
     question_id: int
@@ -41,6 +45,10 @@ class QuestionResponse(BaseModel):
     semester_type: str
     exam_date: Optional[str]
     variant_count: int = 0
+    topic_tags: Optional[List[str]] = None
+    is_reviewed: bool = False
+    review_status: Optional[str] = None
+    image_path: Optional[str] = None
     
     class Config:
         from_attributes = True
@@ -56,18 +64,24 @@ async def get_my_courses(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Get courses for student's branch and academic year"""
+    """Get student's selected courses"""
     if current_user.role != "STUDENT":
         raise HTTPException(status_code=403, detail="Student access required")
     
-    # Get courses for student's branch and year
-    courses = db.query(Course).join(CourseOffering).filter(
-        CourseOffering.branch_id == current_user.branch_id,
-        CourseOffering.academic_year == current_user.academic_year,
-        CourseOffering.is_active == True
+    # Get student's selected courses
+    from app.models.question import StudentCourseSelection
+    selections = db.query(StudentCourseSelection).filter(
+        StudentCourseSelection.student_id == current_user.user_id
     ).all()
     
-    return courses
+    # Get course details for selected courses
+    course_codes = [s.course_code for s in selections]
+    if course_codes:
+        courses = db.query(Course).filter(Course.course_code.in_(course_codes)).all()
+        return courses
+    else:
+        # If no selections, return empty list
+        return []
 
 @router.post("/search")
 async def search_questions(
@@ -79,89 +93,160 @@ async def search_questions(
     if current_user.role != "STUDENT":
         raise HTTPException(status_code=403, detail="Student access required")
     
-    # Build query with filters
-    query = db.query(Question).join(QuestionPaper).filter(Question.is_canonical == True)
-    
-    # Apply filters
-    if request.filters.get("course_codes"):
-        # Include equivalent courses
-        course_codes = request.filters["course_codes"]
-        equivalent_courses = []
-        for course_code in course_codes:
-            # Get equivalent courses
-            equivalences = db.query(CourseEquivalence).filter(
-                (CourseEquivalence.primary_course_code == course_code) |
-                (CourseEquivalence.equivalent_course_code == course_code)
-            ).all()
-            for eq in equivalences:
-                if eq.primary_course_code == course_code:
-                    equivalent_courses.append(eq.equivalent_course_code)
-                else:
-                    equivalent_courses.append(eq.primary_course_code)
+    try:
+        # Build query with filters
+        # Show all questions - students should see all uploaded questions
+        query = db.query(Question)
         
-        all_courses = course_codes + equivalent_courses
-        query = query.filter(Question.course_code.in_(all_courses))
-    
-    if request.filters.get("unit_ids"):
-        query = query.filter(Question.unit_id.in_(request.filters["unit_ids"]))
-    
-    if request.filters.get("marks_min"):
-        query = query.filter(Question.marks >= request.filters["marks_min"])
-    
-    if request.filters.get("marks_max"):
-        query = query.filter(Question.marks <= request.filters["marks_max"])
-    
-    if request.filters.get("bloom_levels"):
-        query = query.filter(Question.bloom_level.in_(request.filters["bloom_levels"]))
-    
-    if request.filters.get("exam_types"):
-        query = query.filter(QuestionPaper.exam_type.in_(request.filters["exam_types"]))
-    
-    if request.filters.get("year_from"):
-        query = query.filter(QuestionPaper.academic_year >= request.filters["year_from"])
-    
-    if request.filters.get("year_to"):
-        query = query.filter(QuestionPaper.academic_year <= request.filters["year_to"])
-    
-    # TODO: Implement semantic search using embeddings
-    # For now, use text search
-    if request.query:
-        query = query.filter(Question.question_text.ilike(f"%{request.query}%"))
-    
-    # Pagination
-    offset = (request.page - 1) * request.limit
-    questions = query.offset(offset).limit(request.limit).all()
-    
-    # Convert to response format
-    results = []
-    for q in questions:
-        # Count variants
-        variant_count = db.query(Question).filter(
-            Question.parent_question_id == q.question_id
-        ).count()
+        # Apply filters
+        filters = request.filters if request.filters else {}
+        if filters.get("course_codes"):
+            # Include equivalent courses
+            course_codes = filters["course_codes"]
+            equivalent_courses = []
+            for course_code in course_codes:
+                # Get equivalent courses
+                equivalences = db.query(CourseEquivalence).filter(
+                    (CourseEquivalence.primary_course_code == course_code) |
+                    (CourseEquivalence.equivalent_course_code == course_code)
+                ).all()
+                for eq in equivalences:
+                    if eq.primary_course_code == course_code:
+                        equivalent_courses.append(eq.equivalent_course_code)
+                    else:
+                        equivalent_courses.append(eq.primary_course_code)
+            
+            all_courses = course_codes + equivalent_courses
+            query = query.filter(Question.course_code.in_(all_courses))
         
-        results.append(QuestionResponse(
-            question_id=q.question_id,
-            question_text=q.question_text,
-            marks=q.marks,
-            bloom_level=q.bloom_level.value if q.bloom_level else None,
-            bloom_category=q.bloom_category.value if q.bloom_category else None,
-            difficulty_level=q.difficulty_level.value if q.difficulty_level else None,
-            course_code=q.course_code,
-            unit_name=q.unit.unit_name if q.unit else None,
-            exam_type=q.paper.exam_type.value,
-            academic_year=q.paper.academic_year,
-            semester_type=q.paper.semester_type.value,
-            exam_date=q.paper.exam_date.isoformat() if q.paper.exam_date else None,
-            variant_count=variant_count
-        ))
-    
-    return {
-        "questions": results,
-        "total": query.count(),
-        "page": request.page,
-        "limit": request.limit
-    }
+        if filters.get("unit_ids"):
+            query = query.filter(Question.unit_id.in_(filters["unit_ids"]))
+        
+        if filters.get("marks_min"):
+            query = query.filter(Question.marks >= filters["marks_min"])
+        
+        if filters.get("marks_max"):
+            query = query.filter(Question.marks <= filters["marks_max"])
+        
+        if filters.get("bloom_levels"):
+            query = query.filter(Question.bloom_level.in_(filters["bloom_levels"]))
+        
+        # Track if we've joined QuestionPaper
+        has_joined_paper = False
+        
+        if filters.get("exam_types"):
+            query = query.join(QuestionPaper, Question.paper_id == QuestionPaper.paper_id).filter(QuestionPaper.exam_type.in_(filters["exam_types"]))
+            has_joined_paper = True
+        
+        if filters.get("year_from"):
+            if not has_joined_paper:
+                query = query.join(QuestionPaper, Question.paper_id == QuestionPaper.paper_id)
+                has_joined_paper = True
+            query = query.filter(QuestionPaper.academic_year >= filters["year_from"])
+        
+        if filters.get("year_to"):
+            if not has_joined_paper:
+                query = query.join(QuestionPaper, Question.paper_id == QuestionPaper.paper_id)
+                has_joined_paper = True
+            query = query.filter(QuestionPaper.academic_year <= filters["year_to"])
+        
+        # Filter by topic tags
+        if filters.get("topic_tags"):
+            import json
+            topic_tags = filters["topic_tags"]
+            # Filter questions where topic_tags JSON contains any of the requested tags
+            matching_questions = []
+            all_questions = query.all()
+            for q in all_questions:
+                if q.topic_tags:
+                    try:
+                        q_tags = json.loads(q.topic_tags) if isinstance(q.topic_tags, str) else q.topic_tags
+                        if any(tag in q_tags for tag in topic_tags):
+                            matching_questions.append(q.question_id)
+                    except:
+                        pass
+            if matching_questions:
+                query = query.filter(Question.question_id.in_(matching_questions))
+            else:
+                # No matches, return empty
+                return {"questions": [], "total": 0, "page": request.page, "limit": request.limit}
+        
+        # Filter by review status
+        if filters.get("review_status"):
+            review_status = filters["review_status"]
+            if review_status == "reviewed":
+                query = query.filter(Question.is_reviewed == True)
+            elif review_status == "non-reviewed":
+                query = query.filter(Question.is_reviewed == False)
+        
+        # Allow empty query to show all questions (browsing mode)
+        query_str = request.query if request.query else ""
+        if query_str and query_str.strip():
+            query = query.filter(Question.question_text.ilike(f"%{query_str.strip()}%"))
+        
+        # Get total count before pagination
+        total = query.count()
+        
+        # Pagination
+        offset = (request.page - 1) * request.limit
+        questions = query.offset(offset).limit(request.limit).all()
+        
+        # Convert to response format
+        results = []
+        for q in questions:
+            # Count variants
+            variant_count = db.query(Question).filter(
+                Question.parent_question_id == q.question_id
+            ).count()
+            
+            # Parse topic tags
+            topic_tags = None
+            if q.topic_tags:
+                try:
+                    import json
+                    topic_tags = json.loads(q.topic_tags) if isinstance(q.topic_tags, str) else q.topic_tags
+                except:
+                    topic_tags = None
+            
+            # Safely access paper attributes - load if not already loaded
+            paper = None
+            if hasattr(q, 'paper') and q.paper:
+                paper = q.paper
+            elif q.paper_id:
+                # Lazy load paper if not already loaded
+                paper = db.query(QuestionPaper).filter(QuestionPaper.paper_id == q.paper_id).first()
+            
+            results.append(QuestionResponse(
+                question_id=q.question_id,
+                question_text=q.question_text,
+                marks=q.marks,
+                bloom_level=q.bloom_level.value if q.bloom_level else None,
+                bloom_category=q.bloom_category.value if q.bloom_category else None,
+                difficulty_level=q.difficulty_level.value if q.difficulty_level else None,
+                course_code=q.course_code,
+                unit_name=q.unit.unit_name if q.unit else None,
+                exam_type=paper.exam_type.value if paper and paper.exam_type else None,
+                academic_year=paper.academic_year if paper else None,
+                semester_type=paper.semester_type.value if paper and paper.semester_type else None,
+                exam_date=paper.exam_date.isoformat() if paper and paper.exam_date else None,
+                variant_count=variant_count,
+                topic_tags=topic_tags,
+                is_reviewed=q.is_reviewed,
+                review_status=q.review_status.value if q.review_status else None,
+                image_path=q.image_path
+            ))
+        
+        return {
+            "questions": results,
+            "total": total,
+            "page": request.page,
+            "limit": request.limit
+        }
+    except Exception as e:
+        import traceback
+        print(f"Error in search_questions: {e}")
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
 
 @router.get("/question/{question_id}/variants")
 async def get_question_variants(
@@ -232,11 +317,50 @@ async def get_bookmarks(
     if current_user.role != "STUDENT":
         raise HTTPException(status_code=403, detail="Student access required")
     
-    bookmarks = db.query(StudentBookmark).filter(
+    from sqlalchemy.orm import joinedload
+    
+    bookmarks = db.query(StudentBookmark).options(
+        joinedload(StudentBookmark.question).joinedload(Question.unit),
+        joinedload(StudentBookmark.question).joinedload(Question.paper)
+    ).filter(
         StudentBookmark.student_id == current_user.user_id
     ).all()
     
-    return bookmarks
+    # Format response with question data
+    import json
+    results = []
+    for bookmark in bookmarks:
+        q = bookmark.question
+        topic_tags = None
+        if q.topic_tags:
+            try:
+                topic_tags = json.loads(q.topic_tags) if isinstance(q.topic_tags, str) else q.topic_tags
+            except:
+                topic_tags = None
+        
+        results.append({
+            "bookmark_id": bookmark.bookmark_id,
+            "question_id": q.question_id,
+            "notes": bookmark.notes,
+            "created_at": bookmark.bookmarked_at.isoformat() if bookmark.bookmarked_at else None,
+            "question": {
+                "question_id": q.question_id,
+                "question_text": q.question_text,
+                "marks": q.marks,
+                "bloom_level": q.bloom_level.value if q.bloom_level else None,
+                "bloom_category": q.bloom_category.value if q.bloom_category else None,
+                "course_code": q.course_code,
+                "unit_name": q.unit.unit_name if q.unit else None,
+                "exam_type": q.paper.exam_type.value if q.paper else None,
+                "academic_year": q.paper.academic_year if q.paper else None,
+                "semester_type": q.paper.semester_type.value if q.paper else None,
+                "topic_tags": topic_tags,
+                "is_reviewed": q.is_reviewed,
+                "review_status": q.review_status.value if q.review_status else None
+            }
+        })
+    
+    return results
 
 @router.post("/random-questions")
 async def get_random_questions(
@@ -264,3 +388,106 @@ async def get_random_questions(
     questions = query.order_by(db.func.random()).limit(request.count).all()
     
     return questions
+
+@router.post("/select-courses")
+async def select_courses(
+    course_codes: List[str],
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Select/enroll in courses (store in database)"""
+    if current_user.role != "STUDENT":
+        raise HTTPException(status_code=403, detail="Student access required")
+    
+    # Validate courses exist
+    valid_courses = db.query(Course).filter(Course.course_code.in_(course_codes)).all()
+    
+    if len(valid_courses) != len(course_codes):
+        invalid = set(course_codes) - {c.course_code for c in valid_courses}
+        raise HTTPException(status_code=400, detail=f"Invalid course codes: {invalid}")
+    
+    # Delete existing selections for this student
+    from app.models.question import StudentCourseSelection
+    db.query(StudentCourseSelection).filter(
+        StudentCourseSelection.student_id == current_user.user_id
+    ).delete()
+    
+    # Create new selections
+    for course_code in course_codes:
+        selection = StudentCourseSelection(
+            student_id=current_user.user_id,
+            course_code=course_code
+        )
+        db.add(selection)
+    
+    db.commit()
+    
+    return {"message": "Courses selected successfully", "courses": course_codes}
+
+@router.get("/papers")
+async def get_question_papers(
+    course_codes: Optional[List[str]] = Query(None),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get question papers for selected courses"""
+    if current_user.role != "STUDENT":
+        raise HTTPException(status_code=403, detail="Student access required")
+    
+    query = db.query(QuestionPaper).filter(
+        QuestionPaper.processing_status == "COMPLETED"
+    )
+    
+    if course_codes:
+        query = query.filter(QuestionPaper.course_code.in_(course_codes))
+    
+    papers = query.order_by(QuestionPaper.exam_date.desc()).all()
+    
+    return papers
+
+@router.get("/papers/{paper_id}/download")
+async def download_question_paper(
+    paper_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Download original question paper file"""
+    if current_user.role != "STUDENT":
+        raise HTTPException(status_code=403, detail="Student access required")
+    
+    paper = db.query(QuestionPaper).filter(QuestionPaper.paper_id == paper_id).first()
+    if not paper:
+        raise HTTPException(status_code=404, detail="Question paper not found")
+    
+    if not paper.pdf_path or not os.path.exists(paper.pdf_path):
+        raise HTTPException(status_code=404, detail="File not found")
+    
+    from fastapi.responses import FileResponse
+    return FileResponse(
+        paper.pdf_path,
+        media_type="application/pdf",
+        filename=os.path.basename(paper.pdf_path)
+    )
+
+@router.delete("/bookmark/{question_id}")
+async def remove_bookmark(
+    question_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Remove a bookmark"""
+    if current_user.role != "STUDENT":
+        raise HTTPException(status_code=403, detail="Student access required")
+    
+    bookmark = db.query(StudentBookmark).filter(
+        StudentBookmark.student_id == current_user.user_id,
+        StudentBookmark.question_id == question_id
+    ).first()
+    
+    if not bookmark:
+        raise HTTPException(status_code=404, detail="Bookmark not found")
+    
+    db.delete(bookmark)
+    db.commit()
+    
+    return {"message": "Bookmark removed successfully"}
